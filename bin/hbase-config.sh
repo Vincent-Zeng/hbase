@@ -43,9 +43,11 @@ script=`basename "$this"`
 bin=`cd "$bin"; pwd`
 this="$bin/$script"
 
+# zeng: HBASE_HOME
 # the root of the hbase installation
 export HBASE_HOME=`dirname "$this"`/..
 
+# zeng: 处理参数中的--config和--hosts
 #check to see if the conf dir or hbase home are given as an optional arguments
 while [ $# -gt 1 ]
 do
@@ -69,5 +71,7 @@ done
  
 # Allow alternate hbase conf dir location.
 HBASE_CONF_DIR="${HBASE_CONF_DIR:-$HBASE_HOME/conf}"
+
+# zeng: $HBASE_HOME/conf/regionservers
 # List of hbase regions servers.
 HBASE_REGIONSERVERS="${HBASE_REGIONSERVERS:-$HBASE_CONF_DIR/regionservers}"

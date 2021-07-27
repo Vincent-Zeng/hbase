@@ -38,6 +38,10 @@ if [ $errCode -ne 0 ]
 then
   exit $errCode
 fi
-"$bin"/hbase-daemon.sh --config "${HBASE_CONF_DIR}" start master 
+
+# zeng: master
+"$bin"/hbase-daemon.sh --config "${HBASE_CONF_DIR}" start master
+
+# zeng: regionserver
 "$bin"/hbase-daemons.sh --config "${HBASE_CONF_DIR}" \
   --hosts "${HBASE_REGIONSERVERS}" start regionserver

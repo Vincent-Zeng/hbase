@@ -289,8 +289,7 @@ public class HStoreKey implements WritableComparable {
    * the result by calling {@link TextSequence#toText()}.
    * @throws InvalidColumnNameException 
    */
-  public static TextSequence extractFamily(final Text col,
-    final boolean withColon)
+  public static TextSequence extractFamily(final Text col, final boolean withColon)
   throws InvalidColumnNameException {
     int offset = getColonOffset(col);
     // Include ':' in copy?

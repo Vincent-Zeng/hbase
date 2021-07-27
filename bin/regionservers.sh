@@ -49,12 +49,15 @@ bin=`cd "$bin"; pwd`
 # If the regionservers file is specified in the command line,
 # then it takes precedence over the definition in 
 # hbase-env.sh. Save it here.
+
+# zeng: regionserver host list
 HOSTLIST=$HBASE_REGIONSERVERS
 
 if [ -f "${HBASE_CONF_DIR}/hbase-env.sh" ]; then
   . "${HBASE_CONF_DIR}/hbase-env.sh"
 fi
 
+# zeng: regionserver host list
 if [ "$HOSTLIST" = "" ]; then
   if [ "$HBASE_REGIONSERVERS" = "" ]; then
     export HOSTLIST="${HBASE_CONF_DIR}/regionservers"
@@ -63,6 +66,7 @@ if [ "$HOSTLIST" = "" ]; then
   fi
 fi
 
+# zeng: 遍历host, ssh执行脚本
 for regionserver in `cat "$HOSTLIST"`; do
  ssh $HBASE_SSH_OPTS $regionserver $"${@// /\\ }" \
    2>&1 | sed "s/^/$regionserver: /" &
