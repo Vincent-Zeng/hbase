@@ -169,9 +169,7 @@ public interface HRegionInterface extends VersionedProtocol {
      * @param family     The column family to match
      * @param timestamp  Timestamp to match
      */
-    public void deleteFamily(Text regionName, Text row, Text family,
-                             long timestamp)
-            throws IOException;
+    public void deleteFamily(Text regionName, Text row, Text family, long timestamp) throws IOException;
 
 
     //

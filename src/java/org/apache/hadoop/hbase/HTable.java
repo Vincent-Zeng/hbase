@@ -639,8 +639,7 @@ public class HTable implements HConstants {
           
     getRegionServerWithRetries(new ServerCallable<Boolean>(row) {
       public Boolean call() throws IOException {
-        server.deleteAll(location.getRegionInfo().getRegionName(), row, 
-          column, ts);
+        server.deleteAll(location.getRegionInfo().getRegionName(), row, column, ts);
         return null;
       }
     });

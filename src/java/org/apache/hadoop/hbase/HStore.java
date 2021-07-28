@@ -446,16 +446,18 @@ public class HStore implements HConstants {
             }
         }
 
-        /*
-         * @param origin Where to start searching.
+        /**
+         * @param origin   Where to start searching.
          * @param versions How many versions to return. Pass
-         * {@link HConstants.ALL_VERSIONS} to retrieve all.
+         *                 {@link HConstants.ALL_VERSIONS} to retrieve all.
          * @return List of all keys that are of the same row and column and of
          * equal or older timestamp.  If no keys, returns an empty List. Does not
          * return null.
          */
-        private List<HStoreKey> internalGetKeys(final SortedMap<HStoreKey, byte[]> map,
-                                                final HStoreKey origin, final int versions) {
+        private List<HStoreKey> internalGetKeys(
+                final SortedMap<HStoreKey, byte[]> map,
+                final HStoreKey origin, final int versions
+        ) {
 
             List<HStoreKey> result = new ArrayList<HStoreKey>();
             SortedMap<HStoreKey, byte[]> tailMap = map.tailMap(origin);
@@ -1119,6 +1121,8 @@ public class HStore implements HConstants {
     void add(HStoreKey key, byte[] value) {
         lock.readLock().lock();
         try {
+
+            // zeng: 写入memcache中
             this.memcache.add(key, value);
 
         } finally {
@@ -1591,7 +1595,7 @@ public class HStore implements HConstants {
             return true;
         }
 
-        // zeng: 版本号在deletes数组里
+        // zeng: 版本号在deletes数组里(也就是说当前cell有对应的tombstone)
         List<Long> timestamps = (deletes == null) ? null : deletes.get(hsk.getColumn());
         if (timestamps != null && timestamps.contains(Long.valueOf(hsk.getTimestamp()))) {
             return true;
@@ -1969,8 +1973,7 @@ public class HStore implements HConstants {
      * matching keys found in store files appended.
      * @throws IOException
      */
-    List<HStoreKey> getKeys(final HStoreKey origin, final int versions)
-            throws IOException {
+    List<HStoreKey> getKeys(final HStoreKey origin, final int versions) throws IOException {
 
         List<HStoreKey> keys = this.memcache.getKeys(origin, versions);
         if (versions != ALL_VERSIONS && keys.size() >= versions) {
@@ -1998,14 +2001,16 @@ public class HStore implements HConstants {
                     }
 
                     do {
+
                         // if the row matches, we might want this one.
                         if (rowMatches(origin, readkey)) {
+
                             // if the cell matches, then we definitely want this key.
                             if (cellMatches(origin, readkey)) {
+
                                 // store the key if it isn't deleted or superceeded by what's
                                 // in the memcache
-                                if (!isDeleted(readkey, readval.get(), false, null) &&
-                                        !keys.contains(readkey)) {
+                                if (!isDeleted(readkey, readval.get(), false, null) && !keys.contains(readkey)) {
                                     keys.add(new HStoreKey(readkey));
 
                                     // if we've collected enough versions, then exit the loop.
@@ -2013,11 +2018,13 @@ public class HStore implements HConstants {
                                         break;
                                     }
                                 }
+
                             } else {
                                 // the cell doesn't match, but there might be more with different
                                 // timestamps, so move to the next key
                                 continue;
                             }
+
                         } else {
                             // the row doesn't match, so we've gone too far.
                             break;
@@ -2267,8 +2274,10 @@ public class HStore implements HConstants {
                 // check the timestamp
                 return target.getTimestamp() <= origin.getTimestamp();
             }
+
             return false;
         }
+
         // otherwise, we want to match on row and column
         return target.matchesRowCol(origin);
     }

@@ -196,6 +196,7 @@ public class HLog implements HConstants {
     }
 
     // zeng: TODO
+
     /**
      * Roll the log writer. That is, start writing log messages to a new file.
      * <p>
@@ -254,8 +255,7 @@ public class HLog implements HConstants {
                     } else {
                         // Get oldest edit/sequence id.  If logs are older than this id,
                         // then safe to remove.
-                        Long oldestOutstandingSeqNum =
-                                Collections.min(this.lastSeqWritten.values());
+                        Long oldestOutstandingSeqNum = Collections.min(this.lastSeqWritten.values());
                         // Get the set of all log files whose final ID is older than or
                         // equal to the oldest pending region operation
                         TreeSet<Long> sequenceNumbers =
@@ -364,29 +364,36 @@ public class HLog implements HConstants {
      * @param timestamp
      * @throws IOException
      */
-    void append(Text regionName, Text tableName,
-                TreeMap<HStoreKey, byte[]> edits) throws IOException {
+    void append(Text regionName, Text tableName, TreeMap<HStoreKey, byte[]> edits) throws IOException {
 
         if (closed) {
             throw new IOException("Cannot append; log is closed");
         }
+
         synchronized (updateLock) {
+            // zeng: 每一个操作cell操作都分配一个id
             long seqNum[] = obtainSeqNum(edits.size());
+
             // The 'lastSeqWritten' map holds the sequence number of the oldest
             // write for each region. When the cache is flushed, the entry for the
             // region being flushed is removed if the sequence number of the flush
             // is greater than or equal to the value in lastSeqWritten.
+            // zeng: 这个hlog下这个region下距离上次flush最早的id
             if (!this.lastSeqWritten.containsKey(regionName)) {
                 this.lastSeqWritten.put(regionName, Long.valueOf(seqNum[0]));
             }
+
             int counter = 0;
             for (Map.Entry<HStoreKey, byte[]> es : edits.entrySet()) {
                 HStoreKey key = es.getKey();
-                HLogKey logKey =
-                        new HLogKey(regionName, tableName, key.getRow(), seqNum[counter++]);
-                HLogEdit logEdit =
-                        new HLogEdit(key.getColumn(), es.getValue(), key.getTimestamp());
+
+                // zeng: hlog key
+                HLogKey logKey = new HLogKey(regionName, tableName, key.getRow(), seqNum[counter++]);
+                // zeng: hlog value
+                HLogEdit logEdit = new HLogEdit(key.getColumn(), es.getValue(), key.getTimestamp());
+
                 try {
+                    // zeng: 写入
                     this.writer.append(logKey, logEdit);
                 } catch (IOException e) {
                     LOG.error("Could not append to log. Opening new log. Exception: ", e);
@@ -399,6 +406,8 @@ public class HLog implements HConstants {
                         throw e2;
                     }
                 }
+
+                // zeng: 多少条
                 this.numEntries++;
             }
         }
@@ -444,11 +453,13 @@ public class HLog implements HConstants {
      */
     private long[] obtainSeqNum(int num) {
         long[] results = new long[num];
+
         synchronized (this.sequenceLock) {
             for (int i = 0; i < num; i++) {
                 results[i] = this.logSeqNum++;
             }
         }
+
         return results;
     }
 
@@ -479,23 +490,30 @@ public class HLog implements HConstants {
      * @param logSeqId
      * @throws IOException
      */
-    void completeCacheFlush(final Text regionName, final Text tableName,
-                            final long logSeqId) throws IOException {
+    void completeCacheFlush(final Text regionName, final Text tableName, final long logSeqId) throws IOException {
 
         try {
+
             if (this.closed) {
                 return;
             }
+
             synchronized (updateLock) {
-                this.writer.append(new HLogKey(regionName, tableName, HLog.METAROW, logSeqId),
-                        new HLogEdit(HLog.METACOLUMN, HLogEdit.completeCacheFlush.get(),
-                                System.currentTimeMillis()));
+                // zeng: 写入一条HBASE::CACHEFLUSH
+                this.writer.append(
+                        new HLogKey(regionName, tableName, HLog.METAROW, logSeqId),
+                        new HLogEdit(HLog.METACOLUMN, HLogEdit.completeCacheFlush.get(), System.currentTimeMillis())
+                );
+
                 this.numEntries++;
+
+                // zeng: flush完了, lastSeqWritten下次需要写入新的id
                 Long seq = this.lastSeqWritten.get(regionName);
                 if (seq != null && logSeqId >= seq.longValue()) {
                     this.lastSeqWritten.remove(regionName);
                 }
             }
+
         } finally {
             this.cacheFlushLock.unlock();
         }

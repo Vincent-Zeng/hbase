@@ -295,8 +295,7 @@ public class HRegion implements HConstants {
     volatile Map<Text, Long> rowsToLocks = new ConcurrentHashMap<Text, Long>();
     volatile Map<Long, Text> locksToRows = new ConcurrentHashMap<Long, Text>();
     volatile Map<Text, HStore> stores = new ConcurrentHashMap<Text, HStore>();
-    volatile Map<Long, TreeMap<HStoreKey, byte[]>> targetColumns =
-            new ConcurrentHashMap<Long, TreeMap<HStoreKey, byte[]>>();
+    volatile Map<Long, TreeMap<HStoreKey, byte[]>> targetColumns = new ConcurrentHashMap<Long, TreeMap<HStoreKey, byte[]>>();
 
     final AtomicLong memcacheSize = new AtomicLong(0);
 
@@ -442,7 +441,7 @@ public class HRegion implements HConstants {
         // zeng: TODO
         this.flushListener = listener;
 
-        // zeng: TODO
+        // zeng: 写入 大于 blockingMemcacheSize 就 wait
         this.blockingMemcacheSize = this.memcacheFlushSize * conf.getInt("hbase.hregion.memcache.block.multiplier", 1);
 
         // zeng: 默认大于256M就分裂region
@@ -1168,8 +1167,7 @@ public class HRegion implements HConstants {
         //     This tells future readers that the HStores were emitted correctly,
         //     and that all updates to the log for this regionName that have lower
         //     log-sequence-ids can be safely ignored.
-        this.log.completeCacheFlush(this.regionInfo.getRegionName(),
-                regionInfo.getTableDesc().getName(), sequenceId);
+        this.log.completeCacheFlush(this.regionInfo.getRegionName(), regionInfo.getTableDesc().getName(), sequenceId);
 
         // zeng: TODO
         // D. Finally notify anyone waiting on memcache to clear:
@@ -1381,13 +1379,16 @@ public class HRegion implements HConstants {
             throws IOException {
 
         List<HStoreKey> keys = null;
+
         Text colFamily = HStoreKey.extractFamily(origin.getColumn());
         HStore targetStore = stores.get(colFamily);
+
         if (targetStore != null) {
             // Pass versions without modification since in the store getKeys, it
             // includes the size of the passed <code>keys</code> array when counting.
             keys = targetStore.getKeys(origin, versions);
         }
+
         return keys;
     }
 
@@ -1444,12 +1445,12 @@ public class HRegion implements HConstants {
      * @param b
      * @throws IOException
      */
-    public void batchUpdate(long timestamp, BatchUpdate b)
-            throws IOException {
+    public void batchUpdate(long timestamp, BatchUpdate b) throws IOException {
         // Do a rough check that we have resources to accept a write.  The check is
         // 'rough' in that between the resource check and the call to obtain a
         // read lock, resources may run out.  For now, the thought is that this
         // will be extremely rare; we'll deal with it when it happens.
+        // zeng: 等待到能写入
         checkResources();
 
         // We obtain a per-row lock, so other clients will block while one client
@@ -1457,46 +1458,68 @@ public class HRegion implements HConstants {
         // #commit or #abort or if the HRegionServer lease on the lock expires.
         // See HRegionServer#RegionListener for how the expire on HRegionServer
         // invokes a HRegion#abort.
+        // zeng: rowkey
         Text row = b.getRow();
+
+        // zeng: 行锁
         long lockid = obtainRowLock(row);
 
-        long commitTime =
-                (timestamp == LATEST_TIMESTAMP) ? System.currentTimeMillis() : timestamp;
+        // zeng: 如果参数没有timestamp, 那么就用当前时间戳
+        long commitTime = (timestamp == LATEST_TIMESTAMP) ? System.currentTimeMillis() : timestamp;
 
         try {
             List<Text> deletes = null;
-            for (BatchOperation op : b) {
+
+            for (BatchOperation op : b) {   // zeng: 遍历操作
+                // zeng: rowkey column timestamp
                 HStoreKey key = new HStoreKey(row, op.getColumn(), commitTime);
+
                 byte[] val = null;
+
                 if (op.isPut()) {
+
                     val = op.getValue();
                     if (HLogEdit.isDeleted(val)) {
                         throw new IOException("Cannot insert value: " + val);
                     }
+
                 } else {
-                    if (timestamp == LATEST_TIMESTAMP) {
+
+                    if (timestamp == LATEST_TIMESTAMP) {    // zeng: 表示给最近版本的cell添加一条tombstone
                         // Save off these deletes
                         if (deletes == null) {
                             deletes = new ArrayList<Text>();
                         }
+
+                        // zeng: 放入deletes中
                         deletes.add(op.getColumn());
                     } else {
+                        // zeng: 写入 HBASE::DELETEVAL
                         val = HLogEdit.deleteBytes.get();
                     }
+
                 }
+
                 if (val != null) {
+                    // zeng: 写入一个临时map
                     localput(lockid, key, val);
                 }
+
             }
-            TreeMap<HStoreKey, byte[]> edits =
-                    this.targetColumns.remove(Long.valueOf(lockid));
+
+            // zeng: 获取这个treemap
+            TreeMap<HStoreKey, byte[]> edits = this.targetColumns.remove(Long.valueOf(lockid));
+
             if (edits != null && edits.size() > 0) {
+                // zeng: 写入 hlog memcache
                 update(edits);
             }
 
             if (deletes != null && deletes.size() > 0) {
                 // We have some LATEST_TIMESTAMP deletes to run.
+
                 for (Text column : deletes) {
+                    // zeng: 取到最近版本的key, 写入一条同时间戳的delete cell
                     deleteMultiple(row, column, LATEST_TIMESTAMP, 1);
                 }
             }
@@ -1524,6 +1547,7 @@ public class HRegion implements HConstants {
     private synchronized void checkResources() {
         boolean blocked = false;
 
+        // zeng: 大于 blockingMemcacheSize 就 wait
         while (this.memcacheSize.get() >= this.blockingMemcacheSize) {
             if (!blocked) {
                 LOG.info("Blocking updates for '" + Thread.currentThread().getName() +
@@ -1534,12 +1558,14 @@ public class HRegion implements HConstants {
             }
 
             blocked = true;
+
             try {
                 wait(threadWakeFrequency);
             } catch (InterruptedException e) {
                 // continue;
             }
         }
+
         if (blocked) {
             LOG.info("Unblocking updates for region " + getRegionName() + " '" +
                     Thread.currentThread().getName() + "'");
@@ -1558,8 +1584,10 @@ public class HRegion implements HConstants {
             throws IOException {
 
         checkColumn(column);
+
         obtainRowLock(row);
         try {
+            // zeng: 对每个版本的cell都建立一条对应的tombstone
             deleteMultiple(row, column, ts, ALL_VERSIONS);
         } finally {
             releaseRowLock(row);
@@ -1580,12 +1608,16 @@ public class HRegion implements HConstants {
 
         try {
             for (Map.Entry<Text, HStore> store : stores.entrySet()) {
+                // zeng: rowkey下所有列的所有版本
                 List<HStoreKey> keys = store.getValue().getKeys(new HStoreKey(row, ts), ALL_VERSIONS);
 
+                // zeng: 建立tombstone
                 TreeMap<HStoreKey, byte[]> edits = new TreeMap<HStoreKey, byte[]>();
                 for (HStoreKey key : keys) {
                     edits.put(key, HLogEdit.deleteBytes.get());
                 }
+
+                // zeng:  写入
                 update(edits);
             }
         } finally {
@@ -1608,15 +1640,21 @@ public class HRegion implements HConstants {
 
         try {
             // find the HStore for the column family
+            // zeng: family 对应store
             HStore store = stores.get(HStoreKey.extractFamily(family));
+
             // find all the keys that match our criteria
+            // zeng: 获取key
             List<HStoreKey> keys = store.getKeys(new HStoreKey(row, timestamp), ALL_VERSIONS);
 
+            // zeng: 建立tombstone
             // delete all the cells
             TreeMap<HStoreKey, byte[]> edits = new TreeMap<HStoreKey, byte[]>();
             for (HStoreKey key : keys) {
                 edits.put(key, HLogEdit.deleteBytes.get());
             }
+
+            // zeng: 写入
             update(edits);
         } finally {
             releaseRowLock(row);
@@ -1635,16 +1673,20 @@ public class HRegion implements HConstants {
      *                 {@link HConstants#ALL_VERSIONS} to delete all.
      * @throws IOException
      */
-    private void deleteMultiple(final Text row, final Text column, final long ts,
-                                final int versions) throws IOException {
-
+    private void deleteMultiple(final Text row, final Text column, final long ts, final int versions) throws IOException {
         HStoreKey origin = new HStoreKey(row, column, ts);
+
+        // zeng: 小于等于origin的几个版本的key
         List<HStoreKey> keys = getKeys(origin, versions);
+
+        // zeng: 写入delete cell
         if (keys.size() > 0) {
             TreeMap<HStoreKey, byte[]> edits = new TreeMap<HStoreKey, byte[]>();
+
             for (HStoreKey key : keys) {
                 edits.put(key, HLogEdit.deleteBytes.get());
             }
+
             update(edits);
         }
     }
@@ -1661,16 +1703,19 @@ public class HRegion implements HConstants {
      * @param val    Value to enter into cell
      * @throws IOException
      */
-    private void localput(final long lockid, final HStoreKey key,
-                          final byte[] val) throws IOException {
-
+    private void localput(final long lockid, final HStoreKey key, final byte[] val) throws IOException {
+        // zeng: family是否存在
         checkColumn(key.getColumn());
+
         Long lid = Long.valueOf(lockid);
+
+        // zen: 写入一个treemap中
         TreeMap<HStoreKey, byte[]> targets = this.targetColumns.get(lid);
         if (targets == null) {
             targets = new TreeMap<HStoreKey, byte[]>();
             this.targetColumns.put(lid, targets);
         }
+
         targets.put(key, val);
     }
 
@@ -1690,7 +1735,7 @@ public class HRegion implements HConstants {
         }
 
         synchronized (updateLock) {                         // prevent a cache flush
-            // zeng: TODO
+            // zeng: 写入hlog中
             this.log.append(regionInfo.getRegionName(), regionInfo.getTableDesc().getName(), updatesByColumn);
 
             long size = 0;
@@ -1699,12 +1744,10 @@ public class HRegion implements HConstants {
                 HStoreKey key = e.getKey();
                 byte[] val = e.getValue();
 
-                size = this.memcacheSize.addAndGet(key.getSize() +
-                        (val == null ? 0 : val.length));
+                size = this.memcacheSize.addAndGet(key.getSize() + (val == null ? 0 : val.length));
 
-                // zeng: HStore.add TODO
-                stores.get(HStoreKey.extractFamily(key.getColumn()))
-                        .add(key, val);
+                // zeng: 写入memcache中
+                stores.get(HStoreKey.extractFamily(key.getColumn())).add(key, val);
             }
 
             // zeng: 大于上限的时候进行flush, 默认64M

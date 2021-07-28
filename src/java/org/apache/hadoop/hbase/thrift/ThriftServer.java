@@ -297,8 +297,7 @@ public class ThriftServer {
       deleteAllTs(tableName, row, column, HConstants.LATEST_TIMESTAMP);
     }
     
-    public void deleteAllTs(byte[] tableName, byte[] row, byte[] column,
-        long timestamp) throws IOError {
+    public void deleteAllTs(byte[] tableName, byte[] row, byte[] column, long timestamp) throws IOError {
       if (LOG.isDebugEnabled()) {
         LOG.debug("deleteAllTs: table=" + new String(tableName) + ", row="
             + new String(row) + ", col=" + new String(column) + ", ts="

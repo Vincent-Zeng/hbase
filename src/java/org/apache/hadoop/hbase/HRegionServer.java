@@ -1642,9 +1642,14 @@ public class HRegionServer implements HConstants, HRegionInterface, Runnable {
     public void batchUpdate(Text regionName, long timestamp, BatchUpdate b)
             throws IOException {
         checkOpen();
+
         this.requestCount.incrementAndGet();
+
+        // zeng: 对应region
         HRegion region = getRegion(regionName);
+
         try {
+            // zeng: batch update
             region.batchUpdate(timestamp, b);
         } catch (IOException e) {
             checkFileSystem();
@@ -1748,8 +1753,7 @@ public class HRegionServer implements HConstants, HRegionInterface, Runnable {
     /**
      * {@inheritDoc}
      */
-    public void deleteAll(final Text regionName, final Text row,
-                          final Text column, final long timestamp)
+    public void deleteAll(final Text regionName, final Text row, final Text column, final long timestamp)
             throws IOException {
         HRegion region = getRegion(regionName);
         region.deleteAll(row, column, timestamp);
@@ -1758,8 +1762,7 @@ public class HRegionServer implements HConstants, HRegionInterface, Runnable {
     /**
      * {@inheritDoc}
      */
-    public void deleteAll(final Text regionName, final Text row,
-                          final long timestamp)
+    public void deleteAll(final Text regionName, final Text row, final long timestamp)
             throws IOException {
         HRegion region = getRegion(regionName);
         region.deleteAll(row, timestamp);
