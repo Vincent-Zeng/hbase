@@ -683,6 +683,7 @@ public class HRegionServer implements HConstants, HRegionInterface, Runnable {
                 this.conf.getInt("hbase.regionserver.info.port", 60030)
         );
 
+        // zeng: new Leases 租约时长默认3m
         this.leases = new Leases(
                 conf.getInt("hbase.regionserver.lease.period", 3 * 60 * 1000),
                 this.threadWakeFrequency);
@@ -1601,33 +1602,45 @@ public class HRegionServer implements HConstants, HRegionInterface, Runnable {
     public HbaseMapWritable next(final long scannerId) throws IOException {
 
         checkOpen();
+
         requestCount.incrementAndGet();
+
         try {
+
+            // zeng: 获取id对应scanner
             String scannerName = String.valueOf(scannerId);
             HScannerInterface s = scanners.get(scannerName);
             if (s == null) {
                 throw new UnknownScannerException("Name: " + scannerName);
             }
+
+            // zeng: 续租约
             this.leases.renewLease(scannerId, scannerId);
 
             // Collect values to be returned here
             HbaseMapWritable values = new HbaseMapWritable();
             HStoreKey key = new HStoreKey();
             TreeMap<Text, byte[]> results = new TreeMap<Text, byte[]>();
-            while (s.next(key, results)) {
+
+            while (s.next(key, results)) {  // zeng: 下一行, 数据写入key 与 results中
+
+                // zeng: 该行所有cell写入values中
                 for (Map.Entry<Text, byte[]> e : results.entrySet()) {
-                    values.put(new HStoreKey(key.getRow(), e.getKey(), key.getTimestamp()),
-                            new ImmutableBytesWritable(e.getValue()));
+                    values.put(new HStoreKey(key.getRow(), e.getKey(), key.getTimestamp()), new ImmutableBytesWritable(e.getValue()));
                 }
 
+                // zeng: 已经有一行了
                 if (values.size() > 0) {
                     // Row has something in it. Return the value.
                     break;
                 }
 
+                // zeng: 清空results
                 // No data for this row, go get another.
                 results.clear();
+
             }
+
             return values;
 
         } catch (IOException e) {
@@ -1664,23 +1677,33 @@ public class HRegionServer implements HConstants, HRegionInterface, Runnable {
     /**
      * {@inheritDoc}
      */
-    public long openScanner(Text regionName, Text[] cols, Text firstRow,
-                            final long timestamp, final RowFilterInterface filter)
+    public long openScanner(Text regionName, Text[] cols, Text firstRow, final long timestamp, final RowFilterInterface filter)
             throws IOException {
+
         checkOpen();
+
         requestCount.incrementAndGet();
+
         try {
             HRegion r = getRegion(regionName);
+
             long scannerId = -1L;
-            HScannerInterface s =
-                    r.getScanner(cols, firstRow, timestamp, filter);
+
+            // zeng: new HScanner
+            HScannerInterface s = r.getScanner(cols, firstRow, timestamp, filter);
+
+            // zeng: 唯一id
             scannerId = rand.nextLong();
             String scannerName = String.valueOf(scannerId);
+
             synchronized (scanners) {
+                // zeng: 写入scanners
                 scanners.put(scannerName, s);
             }
-            this.leases.
-                    createLease(scannerId, scannerId, new ScannerListener(scannerName));
+
+            // zeng: 注册租约
+            this.leases.createLease(scannerId, scannerId, new ScannerListener(scannerName));
+
             return scannerId;
         } catch (IOException e) {
             LOG.error("Error opening scanner (fsOk: " + this.fsOk + ")",
@@ -1727,15 +1750,20 @@ public class HRegionServer implements HConstants, HRegionInterface, Runnable {
             this.scannerName = n;
         }
 
+        // zeng: scanner租约过期, 从scanners中移除, 并关闭scanner
+
         /**
          * {@inheritDoc}
          */
         public void leaseExpired() {
             LOG.info("Scanner " + this.scannerName + " lease expired");
+
             HScannerInterface s = null;
+
             synchronized (scanners) {
                 s = scanners.remove(this.scannerName);
             }
+
             if (s != null) {
                 try {
                     s.close();

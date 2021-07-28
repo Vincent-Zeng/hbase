@@ -510,8 +510,7 @@ public class HStore implements HConstants {
         /**
          * @return a scanner over the keys in the Memcache
          */
-        HInternalScannerInterface getScanner(long timestamp,
-                                             Text targetCols[], Text firstRow) throws IOException {
+        HInternalScannerInterface getScanner(long timestamp, Text targetCols[], Text firstRow) throws IOException {
 
             // Here we rely on ReentrantReadWriteLock's ability to acquire multiple
             // locks by the same thread and to be able to downgrade a write lock to
@@ -519,12 +518,16 @@ public class HStore implements HConstants {
             // need the write lock while creating the memcache snapshot
 
             this.lock.writeLock().lock(); // hold write lock during memcache snapshot
+
+            // zeng: snapshot
             snapshot();                       // snapshot memcache
+
             this.lock.readLock().lock();      // acquire read lock
             this.lock.writeLock().unlock();   // downgrade to read lock
             try {
                 // Prevent a cache flush while we are constructing the scanner
 
+                // zeng: new MemcacheScanner
                 return new MemcacheScanner(timestamp, targetCols, firstRow);
 
             } finally {
@@ -542,35 +545,40 @@ public class HStore implements HConstants {
             Iterator<HStoreKey> keyIterator;
 
             @SuppressWarnings("unchecked")
-            MemcacheScanner(final long timestamp, final Text targetCols[],
-                            final Text firstRow) throws IOException {
-
+            MemcacheScanner(final long timestamp, final Text targetCols[], final Text firstRow) throws IOException {
+                // zeng: 每个family下有一个 ColumnMatch 列表
                 super(timestamp, targetCols);
+
                 try {
+                    // zeng: 复制snapshot
                     this.backingMap = new TreeMap<HStoreKey, byte[]>();
                     this.backingMap.putAll(snapshot);
+
                     this.keys = new HStoreKey[1];
                     this.vals = new byte[1][];
 
                     // Generate list of iterators
 
+                    // zeng: 大于等于firstRow的所有的key
                     HStoreKey firstKey = new HStoreKey(firstRow);
                     if (firstRow != null && firstRow.getLength() != 0) {
-                        keyIterator =
-                                backingMap.tailMap(firstKey).keySet().iterator();
-
+                        keyIterator = backingMap.tailMap(firstKey).keySet().iterator();
                     } else {
                         keyIterator = backingMap.keySet().iterator();
                     }
 
-                    while (getNext(0)) {
+                    while (getNext(0)) {    // zeng: 下一个cell
+                        // zeng: 直到找到的key比firstrow大
                         if (!findFirstRow(0, firstRow)) {
                             continue;
                         }
+
+                        // zeng: 直到找到对应的full column
                         if (columnMatch(0)) {
                             break;
                         }
                     }
+
                 } catch (RuntimeException ex) {
                     LOG.error("error initializing Memcache scanner: ", ex);
                     close();
@@ -595,8 +603,8 @@ public class HStore implements HConstants {
              */
             @Override
             boolean findFirstRow(int i, Text firstRow) {
-                return firstRow.getLength() == 0 ||
-                        keys[i].getRow().compareTo(firstRow) >= 0;
+                // zeng: 找到的 key 是否比 参数key 大
+                return firstRow.getLength() == 0 || keys[i].getRow().compareTo(firstRow) >= 0;
             }
 
             /**
@@ -613,18 +621,29 @@ public class HStore implements HConstants {
                         closeSubScanner(i);
                         break;
                     }
+
                     // Check key is < than passed timestamp for this scanner.
+                    // zeng: 下一个key
                     HStoreKey hsk = keyIterator.next();
+
                     if (hsk == null) {
                         throw new NullPointerException("Unexpected null key");
                     }
-                    if (hsk.getTimestamp() <= this.timestamp) {
+
+                    if (hsk.getTimestamp() <= this.timestamp) { // zeng: timestamp 需要小于等于 参数timestamp
+                        // zeng:  memcache 和 hfile 的scanner 各自占用 keys 和 vals 中一个位置
+
+                        // zeng: key
                         this.keys[i] = hsk;
+                        // zeng: value
                         this.vals[i] = backingMap.get(keys[i]);
+
                         result = true;
+
                         break;
                     }
                 }
+
                 return result;
             }
 
@@ -2404,16 +2423,17 @@ public class HStore implements HConstants {
     /**
      * Return a scanner for both the memcache and the HStore files
      */
-    HInternalScannerInterface getScanner(long timestamp, Text targetCols[],
-                                         Text firstRow, RowFilterInterface filter) throws IOException {
+    HInternalScannerInterface getScanner(
+            long timestamp, Text targetCols[], Text firstRow, RowFilterInterface filter
+    ) throws IOException {
 
         newScannerLock.readLock().lock();           // ability to create a new
         // scanner during a compaction
         try {
             lock.readLock().lock();                   // lock HStore
             try {
+                // zeng: new HStoreScanner
                 return new HStoreScanner(targetCols, firstRow, timestamp, filter);
-
             } finally {
                 lock.readLock().unlock();
             }
@@ -2471,31 +2491,38 @@ public class HStore implements HConstants {
 
         StoreFileScanner(long timestamp, Text[] targetCols, Text firstRow)
                 throws IOException {
+            // zeng: 每个family下有一个 ColumnMatch 列表
             super(timestamp, targetCols);
+
             try {
                 this.readers = new MapFile.Reader[storefiles.size()];
 
+                // zeng: hfile 从老到新
                 // Most recent map file should be first
                 int i = readers.length - 1;
                 for (HStoreFile curHSF : storefiles.values()) {
                     readers[i--] = curHSF.getReader(fs, bloomFilter);
                 }
 
+                // zeng: 每个reader一个keys中的位置
                 this.keys = new HStoreKey[readers.length];
+                // zeng: 每个reader一个vals中的位置
                 this.vals = new byte[readers.length][];
 
                 // Advance the readers to the first pos.
-                for (i = 0; i < readers.length; i++) {
+                for (i = 0; i < readers.length; i++) {  // zeng: 所有reader
                     keys[i] = new HStoreKey();
 
                     if (firstRow.getLength() != 0) {
-                        if (findFirstRow(i, firstRow)) {
+                        if (findFirstRow(i, firstRow)) {    // zeng: 直到找到比firstRow的key, 设置进keys[i]
                             continue;
                         }
                     }
 
-                    while (getNext(i)) {
-                        if (columnMatch(i)) {
+                    // zeng: 执行到这里, 说明findFirstRow没匹配到适当的column, 继续往下找
+
+                    while (getNext(i)) {    // zeng: 下一个cell
+                        if (columnMatch(i)) {   // zeng: 直到匹配对应的full column
                             break;
                         }
                     }
@@ -2520,17 +2547,21 @@ public class HStore implements HConstants {
         @Override
         boolean findFirstRow(int i, Text firstRow) throws IOException {
             ImmutableBytesWritable ibw = new ImmutableBytesWritable();
-            HStoreKey firstKey
-                    = (HStoreKey) readers[i].getClosest(new HStoreKey(firstRow), ibw);
+
+            // zeng: 找到比 firstRow 大的key
+            HStoreKey firstKey = (HStoreKey) readers[i].getClosest(new HStoreKey(firstRow), ibw);
             if (firstKey == null) {
                 // Didn't find it. Close the scanner and return TRUE
                 closeSubScanner(i);
                 return true;
             }
+
             this.vals[i] = ibw.get();
             keys[i].setRow(firstKey.getRow());
             keys[i].setColumn(firstKey.getColumn());
             keys[i].setVersion(firstKey.getTimestamp());
+
+            // zeng: 是否匹配 full column
             return columnMatch(i);
         }
 
@@ -2543,18 +2574,22 @@ public class HStore implements HConstants {
         @Override
         boolean getNext(int i) throws IOException {
             boolean result = false;
+
             ImmutableBytesWritable ibw = new ImmutableBytesWritable();
+
             while (true) {
-                if (!readers[i].next(keys[i], ibw)) {
+                if (!readers[i].next(keys[i], ibw)) {   // zeng: 下一个cell
                     closeSubScanner(i);
                     break;
                 }
-                if (keys[i].getTimestamp() <= this.timestamp) {
+
+                if (keys[i].getTimestamp() <= this.timestamp) { // zeng: timestamp 小于等于 参数timestamp
                     vals[i] = ibw.get();
                     result = true;
                     break;
                 }
             }
+
             return result;
         }
 
@@ -2617,19 +2652,23 @@ public class HStore implements HConstants {
          * Create an Scanner with a handle on the memcache and HStore files.
          */
         @SuppressWarnings("unchecked")
-        HStoreScanner(Text[] targetCols, Text firstRow, long timestamp,
-                      RowFilterInterface filter) throws IOException {
+        HStoreScanner(
+                Text[] targetCols, Text firstRow, long timestamp, RowFilterInterface filter
+        ) throws IOException {
 
             this.dataFilter = filter;
             if (null != dataFilter) {
                 dataFilter.reset();
             }
+
             this.scanners = new HInternalScannerInterface[2];
             this.resultSets = new TreeMap[scanners.length];
             this.keys = new HStoreKey[scanners.length];
 
             try {
+                // zeng: memcache scanner
                 scanners[0] = memcache.getScanner(timestamp, targetCols, firstRow);
+                // zeng: hfile scanner
                 scanners[1] = new StoreFileScanner(timestamp, targetCols, firstRow);
 
                 for (int i = 0; i < scanners.length; i++) {
@@ -2660,6 +2699,7 @@ public class HStore implements HConstants {
                     closeScanner(i);
                 }
             }
+
             // As we have now successfully completed initialization, increment the
             // activeScanner count.
             activeScanners.incrementAndGet();
@@ -2682,25 +2722,33 @@ public class HStore implements HConstants {
         /**
          * {@inheritDoc}
          */
-        public boolean next(HStoreKey key, SortedMap<Text, byte[]> results)
-                throws IOException {
+        public boolean next(HStoreKey key, SortedMap<Text, byte[]> results) throws IOException {
 
             // Filtered flag is set by filters.  If a cell has been 'filtered out'
             // -- i.e. it is not to be returned to the caller -- the flag is 'true'.
             boolean filtered = true;
             boolean moreToFollow = true;
+
             while (filtered && moreToFollow) {
+
                 // Find the lowest-possible key.
                 Text chosenRow = null;
                 long chosenTimestamp = -1;
+
                 for (int i = 0; i < this.keys.length; i++) {
-                    if (scanners[i] != null &&
-                            (chosenRow == null ||
-                                    (keys[i].getRow().compareTo(chosenRow) < 0) ||
-                                    ((keys[i].getRow().compareTo(chosenRow) == 0) &&
-                                            (keys[i].getTimestamp() > chosenTimestamp)))) {
+
+                    if (
+                            scanners[i] != null && (
+                                    chosenRow == null || keys[i].getRow().compareTo(chosenRow) < 0 || (
+                                            keys[i].getRow().compareTo(chosenRow) == 0 && keys[i].getTimestamp() > chosenTimestamp
+                                    )
+                            )
+                    ) {
+
                         chosenRow = new Text(keys[i].getRow());
                         chosenTimestamp = keys[i].getTimestamp();
+
+
                     }
                 }
 
@@ -2710,10 +2758,12 @@ public class HStore implements HConstants {
                 // Store the key and results for each sub-scanner. Merge them as
                 // appropriate.
                 if (chosenTimestamp >= 0 && !filtered) {
+
                     // Here we are setting the passed in key with current row+timestamp
                     key.setRow(chosenRow);
                     key.setVersion(chosenTimestamp);
                     key.setColumn(HConstants.EMPTY_TEXT);
+
                     // Keep list of deleted cell keys within this row.  We need this
                     // because as we go through scanners, the delete record may be in an
                     // early scanner and then the same record with a non-delete, non-null
@@ -2723,17 +2773,19 @@ public class HStore implements HConstants {
                     // scanner and which have delete values.  If memory usage becomes a
                     // problem, could redo as bloom filter.
                     List<HStoreKey> deletes = new ArrayList<HStoreKey>();
+
                     for (int i = 0; i < scanners.length && !filtered; i++) {
-                        while ((scanners[i] != null
-                                && !filtered
-                                && moreToFollow)
-                                && (keys[i].getRow().compareTo(chosenRow) == 0)) {
+
+                        while (
+                                (
+                                        scanners[i] != null && !filtered && moreToFollow
+                                ) && keys[i].getRow().compareTo(chosenRow) == 0
+                        ) {
+
                             // If we are doing a wild card match or there are multiple
                             // matchers per column, we need to scan all the older versions of
                             // this row to pick up the rest of the family members
-                            if (!wildcardMatch
-                                    && !multipleMatchers
-                                    && (keys[i].getTimestamp() != chosenTimestamp)) {
+                            if (!wildcardMatch && !multipleMatchers && keys[i].getTimestamp() != chosenTimestamp) {
                                 break;
                             }
 
@@ -2741,20 +2793,21 @@ public class HStore implements HConstants {
                             // but this had the effect of overwriting newer
                             // values with older ones. So now we only insert
                             // a result if the map does not contain the key.
-                            HStoreKey hsk = new HStoreKey(key.getRow(), EMPTY_TEXT,
-                                    key.getTimestamp());
+                            HStoreKey hsk = new HStoreKey(key.getRow(), EMPTY_TEXT, key.getTimestamp());
                             for (Map.Entry<Text, byte[]> e : resultSets[i].entrySet()) {
+
                                 hsk.setColumn(e.getKey());
+
                                 if (HLogEdit.isDeleted(e.getValue())) {
+
                                     if (!deletes.contains(hsk)) {
                                         // Key changes as we cycle the for loop so add a copy to
                                         // the set of deletes.
                                         deletes.add(new HStoreKey(hsk));
                                     }
-                                } else if (!deletes.contains(hsk) &&
-                                        !filtered &&
-                                        moreToFollow &&
-                                        !results.containsKey(e.getKey())) {
+
+                                } else if (!deletes.contains(hsk) && !filtered && moreToFollow && !results.containsKey(e.getKey())) {
+
                                     if (dataFilter != null) {
                                         // Filter whole row by column data?
                                         filtered =
@@ -2764,38 +2817,52 @@ public class HStore implements HConstants {
                                             break;
                                         }
                                     }
+
                                     results.put(e.getKey(), e.getValue());
+
                                 }
+
                             }
+
                             resultSets[i].clear();
+
                             if (!scanners[i].next(keys[i], resultSets[i])) {
                                 closeScanner(i);
                             }
+
                         }
+
                     }
                 }
 
                 for (int i = 0; i < scanners.length; i++) {
+
                     // If the current scanner is non-null AND has a lower-or-equal
                     // row label, then its timestamp is bad. We need to advance it.
-                    while ((scanners[i] != null) &&
-                            (keys[i].getRow().compareTo(chosenRow) <= 0)) {
+                    while (scanners[i] != null && keys[i].getRow().compareTo(chosenRow) <= 0) {
+
                         resultSets[i].clear();
+
                         if (!scanners[i].next(keys[i], resultSets[i])) {
                             closeScanner(i);
                         }
+
                     }
+
                 }
 
                 moreToFollow = chosenTimestamp >= 0;
 
                 if (dataFilter != null) {
+
                     if (moreToFollow) {
                         dataFilter.rowProcessed(filtered, chosenRow);
                     }
+
                     if (dataFilter.filterAllRemaining()) {
                         moreToFollow = false;
                     }
+
                 }
 
                 if (results.size() <= 0 && !filtered) {
@@ -2812,11 +2879,15 @@ public class HStore implements HConstants {
 
             // Make sure scanners closed if no more results
             if (!moreToFollow) {
+
                 for (int i = 0; i < scanners.length; i++) {
+
                     if (null != scanners[i]) {
                         closeScanner(i);
                     }
+
                 }
+
             }
 
             return moreToFollow;

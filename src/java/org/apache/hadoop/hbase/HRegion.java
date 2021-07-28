@@ -1408,18 +1408,22 @@ public class HRegion implements HConstants {
      * @return HScannerInterface
      * @throws IOException
      */
-    public HScannerInterface getScanner(Text[] cols, Text firstRow,
-                                        long timestamp, RowFilterInterface filter) throws IOException {
+    public HScannerInterface getScanner(Text[] cols, Text firstRow, long timestamp, RowFilterInterface filter) throws IOException {
         lock.readLock().lock();
+
         try {
             if (this.closed.get()) {
                 throw new IOException("Region " + this.getRegionName().toString() +
                         " closed");
             }
+
+            // zeng: 涉及哪些family
             TreeSet<Text> families = new TreeSet<Text>();
             for (int i = 0; i < cols.length; i++) {
                 families.add(HStoreKey.extractFamily(cols[i]));
             }
+
+            // zeng: family对应store
             List<HStore> storelist = new ArrayList<HStore>();
             for (Text family : families) {
                 HStore s = stores.get(family);
@@ -1429,8 +1433,9 @@ public class HRegion implements HConstants {
                 storelist.add(stores.get(family));
 
             }
-            return new HScanner(cols, firstRow, timestamp,
-                    storelist.toArray(new HStore[storelist.size()]), filter);
+
+            // zeng: new HScanner
+            return new HScanner(cols, firstRow, timestamp, storelist.toArray(new HStore[storelist.size()]), filter);
         } finally {
             lock.readLock().unlock();
         }
@@ -1901,12 +1906,14 @@ public class HRegion implements HConstants {
          * Create an HScanner with a handle on many HStores.
          */
         @SuppressWarnings("unchecked")
-        HScanner(Text[] cols, Text firstRow, long timestamp, HStore[] stores,
-                 RowFilterInterface filter)
-                throws IOException {
+        HScanner(Text[] cols, Text firstRow, long timestamp, HStore[] stores, RowFilterInterface filter) throws IOException {
             this.filter = filter;
+
+            // zeng: 每个hstore一个scanner
             this.scanners = new HInternalScannerInterface[stores.length];
+
             try {
+
                 for (int i = 0; i < stores.length; i++) {
                     // TODO: The cols passed in here can include columns from other
                     // stores; add filter so only pertinent columns are passed.
@@ -1914,16 +1921,20 @@ public class HRegion implements HConstants {
                     // Also, if more than one store involved, need to replicate filters.
                     // At least WhileMatchRowFilter will mess up the scan if only
                     // one shared across many rows. See HADOOP-2467.
-                    scanners[i] = stores[i].getScanner(timestamp, cols, firstRow,
-                            filter != null ?
-                                    (RowFilterInterface) WritableUtils.clone(filter, conf) : filter);
+                    // zeng: new HStoreScanner
+                    scanners[i] = stores[i].getScanner(
+                            timestamp, cols, firstRow,
+                            filter != null ? (RowFilterInterface) WritableUtils.clone(filter, conf) : filter
+                    );
                 }
+
             } catch (IOException e) {
                 for (int i = 0; i < this.scanners.length; i++) {
                     if (scanners[i] != null) {
                         closeScanner(i);
                     }
                 }
+
                 throw e;
             }
 
@@ -1931,12 +1942,16 @@ public class HRegion implements HConstants {
             // All results will match the required column-set and scanTime.
             this.resultSets = new TreeMap[scanners.length];
             this.keys = new HStoreKey[scanners.length];
-            for (int i = 0; i < scanners.length; i++) {
+
+            for (int i = 0; i < scanners.length; i++) { // zeng: 遍历每个hstore scanner
+
                 keys[i] = new HStoreKey();
                 resultSets[i] = new TreeMap<Text, byte[]>();
-                if (scanners[i] != null && !scanners[i].next(keys[i], resultSets[i])) {
+
+                if (scanners[i] != null && !scanners[i].next(keys[i], resultSets[i])) { // zeng: HStoreScanner.next
                     closeScanner(i);
                 }
+
             }
 
             // As we have now successfully completed initialization, increment the
@@ -1947,62 +1962,81 @@ public class HRegion implements HConstants {
         /**
          * {@inheritDoc}
          */
-        public boolean next(HStoreKey key, SortedMap<Text, byte[]> results)
-                throws IOException {
+        public boolean next(HStoreKey key, SortedMap<Text, byte[]> results) throws IOException {
             boolean moreToFollow = false;
 
             // Find the lowest-possible key.
 
             Text chosenRow = null;
             long chosenTimestamp = -1;
-            for (int i = 0; i < this.keys.length; i++) {
-                if (scanners[i] != null &&
-                        (chosenRow == null ||
-                                (keys[i].getRow().compareTo(chosenRow) < 0) ||
-                                ((keys[i].getRow().compareTo(chosenRow) == 0) &&
-                                        (keys[i].getTimestamp() > chosenTimestamp)))) {
+            for (int i = 0; i < this.keys.length; i++) {    // zeng: 遍历hstore scanner
+
+                if (
+                        scanners[i] != null && (
+                                chosenRow == null || keys[i].getRow().compareTo(chosenRow) < 0 || (
+                                        keys[i].getRow().compareTo(chosenRow) == 0 && keys[i].getTimestamp() > chosenTimestamp
+                                )
+                        )
+                ) {
+
                     chosenRow = new Text(keys[i].getRow());
                     chosenTimestamp = keys[i].getTimestamp();
+
                 }
+
             }
 
             // Store the key and results for each sub-scanner. Merge them as
             // appropriate.
             if (chosenTimestamp >= 0) {
+
                 // Here we are setting the passed in key with current row+timestamp
                 key.setRow(chosenRow);
                 key.setVersion(chosenTimestamp);
                 key.setColumn(HConstants.EMPTY_TEXT);
 
                 for (int i = 0; i < scanners.length; i++) {
+
                     if (scanners[i] != null && keys[i].getRow().compareTo(chosenRow) == 0) {
+
                         // NOTE: We used to do results.putAll(resultSets[i]);
                         // but this had the effect of overwriting newer
                         // values with older ones. So now we only insert
                         // a result if the map does not contain the key.
                         for (Map.Entry<Text, byte[]> e : resultSets[i].entrySet()) {
+
                             if (!results.containsKey(e.getKey())) {
                                 results.put(e.getKey(), e.getValue());
                             }
+
                         }
+
                         resultSets[i].clear();
+
                         if (!scanners[i].next(keys[i], resultSets[i])) {
                             closeScanner(i);
                         }
+
                     }
+
                 }
+
             }
 
             for (int i = 0; i < scanners.length; i++) {
+
                 // If the current scanner is non-null AND has a lower-or-equal
                 // row label, then its timestamp is bad. We need to advance it.
-                while ((scanners[i] != null) &&
-                        (keys[i].getRow().compareTo(chosenRow) <= 0)) {
+                while ((scanners[i] != null) && (keys[i].getRow().compareTo(chosenRow) <= 0)) {
+
                     resultSets[i].clear();
+
                     if (!scanners[i].next(keys[i], resultSets[i])) {
                         closeScanner(i);
                     }
+
                 }
+
             }
 
             moreToFollow = chosenTimestamp >= 0;
@@ -2013,15 +2047,20 @@ public class HRegion implements HConstants {
 
             // Make sure scanners closed if no more results
             if (!moreToFollow) {
+
                 for (int i = 0; i < scanners.length; i++) {
+
                     if (null != scanners[i]) {
                         closeScanner(i);
                     }
+
                 }
+
             }
 
             if (filter != null && filter.filterNotNull(results)) {
                 LOG.warn("Filter return true on assembled Results in hstore");
+
                 return moreToFollow == true && this.next(key, results);
             }
 
