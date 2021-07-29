@@ -475,6 +475,7 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
                             ", pendingRegions: " +
                             pendingRegions.contains(info.getRegionName()));
                 }
+
                 // Recover the region server's log if there is one.
                 // This is only done from here if we are restarting and there is stale
                 // data in the meta region. Once we are on-line, dead server log
@@ -482,6 +483,7 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
                 if (!initialMetaScanComplete && serverName.length() != 0) {
                     StringBuilder dirName = new StringBuilder("log_");
                     dirName.append(serverName.replace(":", "_"));
+
                     Path logDir = new Path(rootdir, dirName.toString());
                     try {
                         if (fs.exists(logDir)) {
@@ -1368,6 +1370,7 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
      */
 
     // zeng: TODO
+
     /**
      * {@inheritDoc}
      */
@@ -1451,6 +1454,7 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
     }
 
     // zeng: TODO
+
     /**
      * {@inheritDoc}
      */
@@ -2099,6 +2103,7 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
             this.deadServerName = this.deadServer.toString();
             this.logSplit = false;
             this.rootRescanned = false;
+
             StringBuilder dirName = new StringBuilder("log_");
             dirName.append(deadServer.getBindAddress());
             dirName.append("_");
@@ -2244,6 +2249,7 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
             }
         }
 
+        // zeng: region server 挂掉的处理
         @Override
         protected boolean process() throws IOException {
             LOG.info("process shutdown of server " + deadServer + ": logSplit: " +
@@ -2257,7 +2263,9 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
                     if (!splitLogLock.tryLock()) {
                         return false;
                     }
+
                     try {
+                        // zeng: 按region切分挂掉的region server对应的hlog
                         HLog.splitLog(rootdir, oldLogDir, fs, conf);
                     } finally {
                         splitLogLock.unlock();
@@ -2716,8 +2724,7 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
 
             // 2. Create the HRegion
 
-            HRegion region =
-                    HRegion.createHRegion(newRegion, this.rootdir, this.conf);
+            HRegion region = HRegion.createHRegion(newRegion, this.rootdir, this.conf);
 
             // 3. Insert into meta
 

@@ -199,9 +199,12 @@ public class HStoreFile implements HConstants {
      */
     Path getMapFilePath() {
         if (isReference()) {
-            return getMapFilePath(encodedRegionName, fileId,
-                    reference.getEncodedRegionName());
+            return getMapFilePath(
+                    encodedRegionName, fileId,
+                    reference.getEncodedRegionName()
+            );
         }
+
         return getMapFilePath(encodedRegionName, fileId, null);
     }
 
@@ -214,8 +217,10 @@ public class HStoreFile implements HConstants {
 
     private Path getMapFilePath(final String encodedName, final long fid,
                                 final String ern) {
-        return new Path(HStoreFile.getMapDir(basedir, encodedName, colFamily),
-                createHStoreFilename(fid, ern));
+        return new Path(
+                HStoreFile.getMapDir(basedir, encodedName, colFamily),
+                createHStoreFilename(fid, ern)
+        );
     }
 
     /**
@@ -223,10 +228,10 @@ public class HStoreFile implements HConstants {
      */
     Path getInfoFilePath() {
         if (isReference()) {
-            return getInfoFilePath(encodedRegionName, fileId,
-                    reference.getEncodedRegionName());
+            return getInfoFilePath(encodedRegionName, fileId, reference.getEncodedRegionName());
 
         }
+
         return getInfoFilePath(encodedRegionName, fileId, null);
     }
 
@@ -420,18 +425,17 @@ public class HStoreFile implements HConstants {
      * @return MapFile.Writer
      * @throws IOException
      */
-    public MapFile.Writer getWriter(final FileSystem fs,
-                                    final SequenceFile.CompressionType compression,
-                                    final Filter bloomFilter)
-            throws IOException {
+    public MapFile.Writer getWriter(
+            final FileSystem fs, final SequenceFile.CompressionType compression, final Filter bloomFilter
+    ) throws IOException {
         if (isReference()) {
-            throw new IOException("Illegal Access: Cannot get a writer on a" +
-                    "HStoreFile reference");
+            throw new IOException("Illegal Access: Cannot get a writer on a" + "HStoreFile reference");
         }
 
-        return new BloomFilterMapFile.Writer(conf, fs,
-                getMapFilePath().toString(), HStoreKey.class,
-                ImmutableBytesWritable.class, compression, bloomFilter);
+        return new BloomFilterMapFile.Writer(
+                conf, fs, getMapFilePath().toString(), HStoreKey.class,
+                ImmutableBytesWritable.class, compression, bloomFilter
+        );
     }
 
     /**
@@ -497,16 +501,26 @@ public class HStoreFile implements HConstants {
      * @return the info directory path
      */
     static Path getInfoDir(Path dir, String encodedRegionName, Text colFamily) {
-        return new Path(dir, new Path(encodedRegionName,
-                new Path(colFamily.toString(), HSTORE_INFO_DIR)));
+        return new Path(
+                dir,
+                new Path(
+                        encodedRegionName,
+                        new Path(colFamily.toString(), HSTORE_INFO_DIR)
+                )
+        );
     }
 
     /**
      * @return the bloom filter directory path
      */
     static Path getFilterDir(Path dir, String encodedRegionName, Text colFamily) {
-        return new Path(dir, new Path(encodedRegionName,
-                new Path(colFamily.toString(), HSTORE_FILTER_DIR)));
+        return new Path(
+                dir,
+                new Path(
+                        encodedRegionName,
+                        new Path(colFamily.toString(), HSTORE_FILTER_DIR)
+                )
+        );
     }
 
     /*
@@ -626,9 +640,11 @@ public class HStoreFile implements HConstants {
              * @param compression
              * @throws IOException
              */
-            public HbaseWriter(Configuration conf, FileSystem fs, String dirName,
-                               Class<Writable> keyClass, Class<Writable> valClass,
-                               SequenceFile.CompressionType compression)
+            public HbaseWriter(
+                    Configuration conf, FileSystem fs, String dirName,
+                    Class<Writable> keyClass, Class<Writable> valClass,
+                    SequenceFile.CompressionType compression
+            )
                     throws IOException {
                 super(conf, fs, dirName, keyClass, valClass, compression);
                 // Default for mapfiles is 128.  Makes random reads faster if we
@@ -734,9 +750,12 @@ public class HStoreFile implements HConstants {
             @Override
             public void append(WritableComparable key, Writable val)
                     throws IOException {
+                // zeng: 加入blommfilter中
                 if (bloomFilter != null) {
                     bloomFilter.add(getBloomFilterKey(key));
                 }
+
+                // zeng: MapFile.Writer.append
                 super.append(key, val);
             }
         }

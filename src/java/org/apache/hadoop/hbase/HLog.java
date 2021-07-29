@@ -195,7 +195,7 @@ public class HLog implements HConstants {
         }
     }
 
-    // zeng: TODO
+    // zeng: hlog滚动
 
     /**
      * Roll the log writer. That is, start writing log messages to a new file.
@@ -231,14 +231,19 @@ public class HLog implements HConstants {
                     }
                     if (filenum > 0) {
                         synchronized (this.sequenceLock) {
+                            // zeng: 每次roll之前的文件 add 进 outputfiles
                             this.outputfiles.put(Long.valueOf(this.logSeqNum - 1), p);
                         }
                     }
                 }
 
+                // zeng: 创建新的文件. 然后filenum+1
                 Path newPath = computeFilename(filenum++);
-                this.writer = SequenceFile.createWriter(this.fs, this.conf, newPath,
-                        HLogKey.class, HLogEdit.class, getCompressionType(this.conf));
+                this.writer = SequenceFile.createWriter(
+                        this.fs, this.conf, newPath, HLogKey.class, HLogEdit.class, getCompressionType(this.conf)
+
+                );
+
                 LOG.info("new log writer created at " + newPath);
 
                 // Can we delete any of the old log files?
@@ -255,9 +260,12 @@ public class HLog implements HConstants {
                     } else {
                         // Get oldest edit/sequence id.  If logs are older than this id,
                         // then safe to remove.
+                        // zeng: flush之后最小sequence id
                         Long oldestOutstandingSeqNum = Collections.min(this.lastSeqWritten.values());
+
                         // Get the set of all log files whose final ID is older than or
                         // equal to the oldest pending region operation
+                        // zeng: 在flush之前的id
                         TreeSet<Long> sequenceNumbers =
                                 new TreeSet<Long>(this.outputfiles.headMap(
                                         (Long.valueOf(oldestOutstandingSeqNum.longValue() + 1L))).keySet()
@@ -272,6 +280,7 @@ public class HLog implements HConstants {
                                     break;
                                 }
                             }
+
                             if (LOG.isDebugEnabled() && sequenceNumbers.size() > 0) {
                                 LOG.debug("Found " + sequenceNumbers.size() +
                                         " logs to remove " +
@@ -280,6 +289,7 @@ public class HLog implements HConstants {
                             }
                         }
 
+                        // zeng: 删除这些log
                         if (sequenceNumbers.size() > 0) {
                             for (Long seq : sequenceNumbers) {
                                 deleteLogFile(this.outputfiles.remove(seq), seq);
@@ -287,6 +297,7 @@ public class HLog implements HConstants {
                         }
                     }
                 }
+
                 this.numEntries = 0;
             }
 
@@ -306,8 +317,7 @@ public class HLog implements HConstants {
      * file-number.
      */
     Path computeFilename(final long fn) {
-        return new Path(dir,
-                HLOG_DATFILE + String.format("%1$03d", Long.valueOf(fn)));
+        return new Path(dir, HLOG_DATFILE + String.format("%1$03d", Long.valueOf(fn)));
     }
 
     /**
@@ -378,7 +388,7 @@ public class HLog implements HConstants {
             // write for each region. When the cache is flushed, the entry for the
             // region being flushed is removed if the sequence number of the flush
             // is greater than or equal to the value in lastSeqWritten.
-            // zeng: 这个hlog下这个region下距离上次flush最早的id
+            // zeng: 这个hlog下这个region下上次flush之后最早的id
             if (!this.lastSeqWritten.containsKey(regionName)) {
                 this.lastSeqWritten.put(regionName, Long.valueOf(seqNum[0]));
             }
@@ -529,6 +539,9 @@ public class HLog implements HConstants {
         this.cacheFlushLock.unlock();
     }
 
+
+    // zeng: 按region切分挂掉的region server对应的hlog
+
     /**
      * Split up a bunch of log files, that are no longer being written to, into
      * new files, one per region. Delete the old log files when finished.
@@ -540,8 +553,7 @@ public class HLog implements HConstants {
      * @param conf    HBaseConfiguration
      * @throws IOException
      */
-    static void splitLog(Path rootDir, Path srcDir, FileSystem fs,
-                         Configuration conf) throws IOException {
+    static void splitLog(Path rootDir, Path srcDir, FileSystem fs, Configuration conf) throws IOException {
         if (!fs.exists(srcDir)) {
             // Nothing to do
             return;
@@ -551,8 +563,7 @@ public class HLog implements HConstants {
             // Nothing to do
             return;
         }
-        LOG.info("splitting " + logfiles.length + " log(s) in " +
-                srcDir.toString());
+        LOG.info("splitting " + logfiles.length + " log(s) in " + srcDir.toString());
         Map<Text, SequenceFile.Writer> logWriters =
                 new HashMap<Text, SequenceFile.Writer>();
         try {
@@ -569,8 +580,7 @@ public class HLog implements HConstants {
                 }
                 HLogKey key = new HLogKey();
                 HLogEdit val = new HLogEdit();
-                SequenceFile.Reader in =
-                        new SequenceFile.Reader(fs, logfiles[i].getPath(), conf);
+                SequenceFile.Reader in = new SequenceFile.Reader(fs, logfiles[i].getPath(), conf);
                 try {
                     int count = 0;
                     for (; in.next(key, val); count++) {

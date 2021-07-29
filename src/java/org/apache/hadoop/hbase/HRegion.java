@@ -376,7 +376,7 @@ public class HRegion implements HConstants {
         // zeng: region dir
         this.regiondir = new Path(basedir, this.regionInfo.getEncodedName());
 
-        // zeng: TODO
+        // zeng: 挂掉的机器的hlog split后 属于这个region 的file
         Path oldLogFile = new Path(regiondir, HREGION_OLDLOGFILE_NAME);
 
         // zeng: table dir / compaction.dir  / encoded region name
@@ -395,9 +395,8 @@ public class HRegion implements HConstants {
         long maxSeqId = -1;
         for (HColumnDescriptor c : this.regionInfo.getTableDesc().families().values()) {
 
-            // zeng:  TODO
-            HStore store = new HStore(this.basedir, this.regionInfo, c, this.fs,
-                    oldLogFile, this.conf);
+            // zeng:  new HStore
+            HStore store = new HStore(this.basedir, this.regionInfo, c, this.fs, oldLogFile, this.conf);
 
             stores.put(c.getFamilyName(), store);
 
@@ -408,11 +407,12 @@ public class HRegion implements HConstants {
             }
         }
 
-        // zeng: TODO
+        // zeng: 删除恢复完的hlog文件
         if (fs.exists(oldLogFile)) {
             if (LOG.isDebugEnabled()) {
                 LOG.debug("Deleting old log file: " + oldLogFile);
             }
+
             fs.delete(oldLogFile);
         }
 
@@ -438,7 +438,7 @@ public class HRegion implements HConstants {
         // zeng: 默认64M进行flush
         this.memcacheFlushSize = conf.getInt("hbase.hregion.memcache.flush.size", 1024 * 1024 * 64);
 
-        // zeng: TODO
+        // zeng: 注册listener, 需要flush通知listener
         this.flushListener = listener;
 
         // zeng: 写入 大于 blockingMemcacheSize 就 wait
@@ -886,9 +886,11 @@ public class HRegion implements HConstants {
 
             if (store.needsCompaction()) {  // zeng: 是否需要compact
                 needsCompaction = true;
+
                 if (LOG.isDebugEnabled()) {
                     LOG.debug(store.toString() + " needs compaction");
                 }
+
                 break;
             }
         }
@@ -1134,7 +1136,7 @@ public class HRegion implements HConstants {
         // explicitly cleaned up using a call to deleteSnapshot() or by calling
         // abort.
         //
-        // zeng: TODO
+        // zeng: flush时log的当前id
         long sequenceId = log.startCacheFlush();
 
         // Any failure from here on out will be catastrophic requiring server
@@ -1143,7 +1145,7 @@ public class HRegion implements HConstants {
         // be part of the current running servers state.
 
         try {
-            // zeng: TODO
+            // zeng: memcache 写入 hfile
             // A.  Flush memcache to all the HStores.
             // Keep running vector of all store files that includes both old and the
             // just-made new flush store file.
@@ -1162,14 +1164,14 @@ public class HRegion implements HConstants {
         // If we get to here, the HStores have been written. If we get an
         // error in completeCacheFlush it will release the lock it is holding
 
-        // zeng: TODO
+        // zeng: 写入一条 flush标记 到 hlog 中
         // B.  Write a FLUSHCACHE-COMPLETE message to the log.
         //     This tells future readers that the HStores were emitted correctly,
         //     and that all updates to the log for this regionName that have lower
         //     log-sequence-ids can be safely ignored.
         this.log.completeCacheFlush(this.regionInfo.getRegionName(), regionInfo.getTableDesc().getName(), sequenceId);
 
-        // zeng: TODO
+        // zeng: 通知wait memcache的线程
         // D. Finally notify anyone waiting on memcache to clear:
         // e.g. checkResources().
         synchronized (this) {
@@ -2129,7 +2131,7 @@ public class HRegion implements HConstants {
 
     // Utility methods
 
-    // zeng: create new region
+    // zeng: TODO 创建元数据用的region?
 
     /**
      * Convenience method creating new HRegions. Used by createTable and by the
@@ -2154,10 +2156,10 @@ public class HRegion implements HConstants {
         FileSystem fs = FileSystem.get(conf);
         fs.mkdirs(regionDir);
 
-        // zeng: TODO
+        // zeng: new HRegion
         return new HRegion(
                 tableDir,
-                new HLog(fs, new Path(regionDir, HREGION_LOGDIR_NAME), conf, null), // zeng: TODO
+                new HLog(fs, new Path(regionDir, HREGION_LOGDIR_NAME), conf, null), // zeng: new HLog  // region dir / log
                 fs, conf, info, null, null
         );
     }

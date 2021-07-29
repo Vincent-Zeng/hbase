@@ -774,7 +774,7 @@ public class HRegionServer implements HConstants, HRegionInterface, Runnable {
                                             try {
                                                 // zeng: 用启动时间戳标识本次启动
                                                 serverInfo.setStartCode(System.currentTimeMillis());
-                                                // zeng: 本次启动都是一个新的hlog
+                                                // zeng: 每次启动都是一个新的hlog
                                                 log = setupHLog();
                                             } catch (IOException e) {
                                                 this.abortRequested = true;
@@ -1044,7 +1044,7 @@ public class HRegionServer implements HConstants, HRegionInterface, Runnable {
         // zeng: 处理hmaster指令的线程
         Threads.setDaemonThreadRunning(this.workerThread, n + ".worker", handler);
 
-        // zeng: TODO
+        // zeng: 租约过期检测线程
         // Leases is not a Thread. Internally it runs a daemon thread.  If it gets
         // an unhandled exception, it will just exit.
         this.leases.setName(n + ".leaseChecker");

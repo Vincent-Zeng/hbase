@@ -119,10 +119,11 @@ public class HStore implements HConstants {
             this.lock.writeLock().lock();
             try {
                 SortedMap<HStoreKey, byte[]> currentSnapshot = snapshot;
+
+                // zeng: reset snapshot
                 snapshot = Collections.synchronizedSortedMap(new TreeMap<HStoreKey, byte[]>());
 
                 return currentSnapshot;
-
             } finally {
                 this.lock.writeLock().unlock();
             }
@@ -804,7 +805,7 @@ public class HStore implements HConstants {
                 fs.mkdirs(filterDir);
             }
 
-            // zeng: TODO
+            // zeng: 加载或者新建bloomfilter
             this.bloomFilter = loadOrCreateBloomFilter();
         }
 
@@ -819,7 +820,7 @@ public class HStore implements HConstants {
         // MapFiles are in a reliable state.  Every entry in 'mapdir' must have a
         // corresponding one in 'loginfodir'. Without a corresponding log info
         // file, the entry in 'mapdir' must be deleted.
-        // zeng: TODO
+        // zeng: 加载region family 目录下的hfile
         List<HStoreFile> hstoreFiles = loadHStoreFiles(infodir, mapdir);
         for (HStoreFile hsf : hstoreFiles) {
             this.storefiles.put(Long.valueOf(hsf.loadInfo(fs)), hsf);
@@ -834,13 +835,14 @@ public class HStore implements HConstants {
         // means it was built prior to the previous run of HStore, and so it cannot
         // contain any updates also contained in the log.
 
-        // zeng: TODO
+        // zeng: 所有hfile中最大的sequence id
         this.maxSeqId = getMaxSequenceId(hstoreFiles);
         if (LOG.isDebugEnabled()) {
             LOG.debug("maximum sequence id for hstore " + storeName + " is " +
                     this.maxSeqId);
         }
 
+        // zeng: 根据hlog恢复memcache
         doReconstructionLog(reconstructionLog, maxSeqId);
 
         // By default, we compact if an HStore has more than
@@ -858,7 +860,7 @@ public class HStore implements HConstants {
 
         // Finally, start up all the map readers! (There could be more than one
         // since we haven't compacted yet.)
-        // zeng:TODO
+        // zeng: new BloomFilterMapFile.Reader
         for (Map.Entry<Long, HStoreFile> e : this.storefiles.entrySet()) {
             this.readers.put(e.getKey(), e.getValue().getReader(this.fs, this.bloomFilter));
         }
@@ -880,6 +882,7 @@ public class HStore implements HConstants {
                 }
             }
         }
+
         return maxSeqID;
     }
 
@@ -895,8 +898,7 @@ public class HStore implements HConstants {
      * lower than maxSeqID.  (Because we know such log messages are already
      * reflected in the MapFiles.)
      */
-    private void doReconstructionLog(final Path reconstructionLog,
-                                     final long maxSeqID)
+    private void doReconstructionLog(final Path reconstructionLog, final long maxSeqID)
             throws UnsupportedEncodingException, IOException {
 
         if (reconstructionLog == null || !fs.exists(reconstructionLog)) {
@@ -904,35 +906,42 @@ public class HStore implements HConstants {
             return;
         }
         long maxSeqIdInLog = -1;
-        TreeMap<HStoreKey, byte[]> reconstructedCache =
-                new TreeMap<HStoreKey, byte[]>();
+        TreeMap<HStoreKey, byte[]> reconstructedCache = new TreeMap<HStoreKey, byte[]>();
 
-        SequenceFile.Reader logReader = new SequenceFile.Reader(this.fs,
-                reconstructionLog, this.conf);
+        // zeng: file reader
+        SequenceFile.Reader logReader = new SequenceFile.Reader(this.fs, reconstructionLog, this.conf);
 
         try {
             HLogKey key = new HLogKey();
             HLogEdit val = new HLogEdit();
             long skippedEdits = 0;
             long editsCount = 0;
-            while (logReader.next(key, val)) {
+            while (logReader.next(key, val)) {  // zeng: 下一条
+
+                // zeng: log重放中最大的sequence id
                 maxSeqIdInLog = Math.max(maxSeqIdInLog, key.getLogSeqNum());
+
+                // zeng: 如果小于hfile中的sequence id, 说明已经flush了, 不需要处理
                 if (key.getLogSeqNum() <= maxSeqID) {
                     skippedEdits++;
                     continue;
                 }
+
                 // Check this edit is for me. Also, guard against writing
                 // METACOLUMN info such as HBASE::CACHEFLUSH entries
+                // zeng: 不是同一个family, 不需要处理
                 Text column = val.getColumn();
-                if (column.equals(HLog.METACOLUMN)
-                        || !key.getRegionName().equals(info.getRegionName())
-                        || !HStoreKey.extractFamily(column).equals(family.getFamilyName())) {
+                if (column.equals(HLog.METACOLUMN) || !key.getRegionName().equals(info.getRegionName()) || !HStoreKey.extractFamily(column).equals(family.getFamilyName())) {
                     continue;
                 }
+
+                // zeng: reconstructedCache.put
                 HStoreKey k = new HStoreKey(key.getRow(), column, val.getTimestamp());
                 reconstructedCache.put(k, val.getVal());
                 editsCount++;
+
             }
+
             if (LOG.isDebugEnabled()) {
                 LOG.debug("Applied " + editsCount + ", skipped " + skippedEdits +
                         " because sequence id <= " + maxSeqID);
@@ -946,6 +955,8 @@ public class HStore implements HConstants {
             if (LOG.isDebugEnabled()) {
                 LOG.debug("flushing reconstructionCache");
             }
+
+            // zeng: reconstructedCache flush to hfile
             internalFlushCache(reconstructedCache, maxSeqIdInLog + 1);
         }
     }
@@ -1042,15 +1053,17 @@ public class HStore implements HConstants {
      * previously. Otherwise, it will create a new bloom filter.
      */
     private Filter loadOrCreateBloomFilter() throws IOException {
+        // zeng: bloomfilter file
         Path filterFile = new Path(filterDir, BLOOMFILTER_FILE_NAME);
+
         Filter bloomFilter = null;
-        if (fs.exists(filterFile)) {
+
+        if (fs.exists(filterFile)) {    // zeng: 如果存在文件
             if (LOG.isDebugEnabled()) {
                 LOG.debug("loading bloom filter for " + this.storeName);
             }
 
-            BloomFilterDescriptor.BloomFilterType type =
-                    family.getBloomFilter().filterType;
+            BloomFilterDescriptor.BloomFilterType type = family.getBloomFilter().filterType;
 
             switch (type) {
 
@@ -1070,19 +1083,22 @@ public class HStore implements HConstants {
                     throw new IllegalArgumentException("unknown bloom filter type: " +
                             type);
             }
+
+
+            // zeng: 加载文件中的bloomfilter
             FSDataInputStream in = fs.open(filterFile);
             try {
                 bloomFilter.readFields(in);
             } finally {
                 fs.close();
             }
-        } else {
+
+        } else {    // zeng: 新建bloomfilter
             if (LOG.isDebugEnabled()) {
                 LOG.debug("creating bloom filter for " + this.storeName);
             }
 
-            BloomFilterDescriptor.BloomFilterType type =
-                    family.getBloomFilter().filterType;
+            BloomFilterDescriptor.BloomFilterType type = family.getBloomFilter().filterType;
 
             switch (type) {
 
@@ -1103,6 +1119,7 @@ public class HStore implements HConstants {
                                     family.getBloomFilter().nbHash);
             }
         }
+
         return bloomFilter;
     }
 
@@ -1115,9 +1132,11 @@ public class HStore implements HConstants {
         if (LOG.isDebugEnabled()) {
             LOG.debug("flushing bloom filter for " + this.storeName);
         }
-        FSDataOutputStream out =
-                fs.create(new Path(filterDir, BLOOMFILTER_FILE_NAME));
+
+        // zeng: table dir/ encoded region name / family name / filter / filter
+        FSDataOutputStream out = fs.create(new Path(filterDir, BLOOMFILTER_FILE_NAME));
         try {
+            // zeng: bloomfilter写入文件
             bloomFilter.write(out);
         } finally {
             out.close();
@@ -1205,17 +1224,16 @@ public class HStore implements HConstants {
         internalFlushCache(memcache.getSnapshot(), logCacheFlushId);
     }
 
-    // zeng: TODO
-    private void internalFlushCache(SortedMap<HStoreKey, byte[]> cache,
-                                    long logCacheFlushId) throws IOException {
+    // zeng: memcache 写入 hfile
+    private void internalFlushCache(SortedMap<HStoreKey, byte[]> cache, long logCacheFlushId) throws IOException {
 
         synchronized (flushLock) {
-            // zeng: TODO
+            // zeng: nwe HStoreFile
             // A. Write the Maps out to the disk
             HStoreFile flushedFile = new HStoreFile(conf, fs, basedir, info.getEncodedName(), family.getFamilyName(), -1L, null);
             String name = flushedFile.toString();
 
-            // zeng: TODO
+            // zeng: new BloomFilterMapFile.Writer
             MapFile.Writer out = flushedFile.getWriter(this.fs, this.compression, this.bloomFilter);
 
             // Here we tried picking up an existing HStoreFile from disk and
@@ -1229,14 +1247,18 @@ public class HStore implements HConstants {
             //
             // Related, looks like 'merging compactions' in BigTable paper interlaces
             // a memcache flush.  We don't.
-            // zeng: TODO
             int entries = 0;
             try {
-                for (Map.Entry<HStoreKey, byte[]> es : cache.entrySet()) {
+                for (Map.Entry<HStoreKey, byte[]> es : cache.entrySet()) {  // zeng: 遍历snapshot里的item
+                    // zeng: key
                     HStoreKey curkey = es.getKey();
+                    // zeng: family
                     TextSequence f = HStoreKey.extractFamily(curkey.getColumn());
-                    if (f.equals(this.family.getFamilyName())) {
+
+                    if (f.equals(this.family.getFamilyName())) {    // zeng: 如果是这个family的item
                         entries++;
+
+                        // zeng: BloomFilterMapFile.Writer.append
                         out.append(curkey, new ImmutableBytesWritable(es.getValue()));
                     }
                 }
@@ -1244,31 +1266,35 @@ public class HStore implements HConstants {
                 out.close();
             }
 
-            // zeng: TODO
+            // zeng: flush id 写入 info 下文件中
             // B. Write out the log sequence number that corresponds to this output
             // MapFile.  The MapFile is current up to and including the log seq num.
             flushedFile.writeInfo(fs, logCacheFlushId);
 
-            // zeng: TODO
+            // zeng: bloomfilter写入文件中
             // C. Flush the bloom filter if any
             if (bloomFilter != null) {
                 flushBloomFilter();
             }
 
-            // zeng: TODO
+            // zeng: 加载新建的hfile
             // D. Finally, make the new MapFile available.
             this.lock.writeLock().lock();
             try {
                 Long flushid = Long.valueOf(logCacheFlushId);
                 // Open the map file reader.
+                // zeng: reader
                 this.readers.put(flushid, flushedFile.getReader(this.fs, this.bloomFilter));
+                // zeng: hfile
                 this.storefiles.put(flushid, flushedFile);
+
                 if (LOG.isDebugEnabled()) {
                     LOG.debug("Added " + name + " with " + entries +
                             " entries, sequence id " + logCacheFlushId + ", and size " +
                             StringUtils.humanReadableInt(flushedFile.length()) + " for " +
                             this.storeName);
                 }
+
             } finally {
                 this.lock.writeLock().unlock();
             }
@@ -1355,7 +1381,7 @@ public class HStore implements HConstants {
                     conf, fs, this.compactionDir, info.getEncodedName(), family.getFamilyName(),
                     -1L, null
             );
-            // zeng: TODO
+            // zeng: BloomFilterMapFile.Writer
             MapFile.Writer compactedOut = compactedOutputFile.getWriter(this.fs, this.compression, this.bloomFilter);
 
             try {
@@ -1365,10 +1391,11 @@ public class HStore implements HConstants {
                 compactedOut.close();
             }
 
-            // zeng: TODO
+            // zeng: 这些hfile中最打的sequence id
             // Now, write out an HSTORE_LOGINFOFILE for the brand-new TreeMap.
             // Compute max-sequenceID seen in any of the to-be-compacted TreeMaps.
             long maxId = getMaxSequenceId(filesToCompact);
+            // zeng: 写入 新hfile 的 info文件
             compactedOutputFile.writeInfo(fs, maxId);
 
             // zeng: 提交compact
@@ -1682,7 +1709,7 @@ public class HStore implements HConstants {
         newScannerLock.writeLock().lock();                  // prevent new scanners
 
         try {
-            // zeng: 等待不存在active的scanner
+            // zeng: 等待 activeScanners 中没有scanner
             synchronized (activeScanners) {
                 while (activeScanners.get() != 0) {
                     try {
@@ -1717,7 +1744,6 @@ public class HStore implements HConstants {
 
 
                 // 4. and 5. Unload all the replaced MapFiles, close and delete.
-                // zeng:
                 List<Long> toDelete = new ArrayList<Long>();
                 for (Map.Entry<Long, HStoreFile> e : this.storefiles.entrySet()) {
                     // zeng: 不是被compact的hfile
