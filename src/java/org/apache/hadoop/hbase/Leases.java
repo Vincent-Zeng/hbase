@@ -209,15 +209,20 @@ public class Leases {
         LeaseName name = null;
         synchronized (leases) {
             synchronized (sortedLeases) {
+                // zeng: 获取Lease
                 name = createLeaseName(holderId, resourceId);
                 Lease lease = leases.get(name);
+
                 if (lease == null) {
                     // It's possible that someone tries to renew the lease, but
                     // it just expired a moment ago.  So just skip it.
                     return;
                 }
+
+                // zeng: 从leases sortedLeases中移除
                 sortedLeases.remove(lease);
                 leases.remove(name);
+
             }
         }
     }

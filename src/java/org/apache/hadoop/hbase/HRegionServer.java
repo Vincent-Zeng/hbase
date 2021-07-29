@@ -1717,23 +1717,33 @@ public class HRegionServer implements HConstants, HRegionInterface, Runnable {
      * {@inheritDoc}
      */
     public void close(final long scannerId) throws IOException {
+
         checkOpen();
         requestCount.incrementAndGet();
+
         try {
+            // zeng: 从scanners中移除
             String scannerName = String.valueOf(scannerId);
             HScannerInterface s = null;
             synchronized (scanners) {
                 s = scanners.remove(scannerName);
             }
+
             if (s == null) {
                 throw new UnknownScannerException(scannerName);
             }
+
+            // zeng: close
             s.close();
+
+            // zeng: 取消租约
             this.leases.cancelLease(scannerId, scannerId);
+
         } catch (IOException e) {
             checkFileSystem();
             throw e;
         }
+
     }
 
     Map<String, HScannerInterface> scanners =
