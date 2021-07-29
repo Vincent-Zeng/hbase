@@ -2692,12 +2692,15 @@ public class HStore implements HConstants {
             // Advance to the first key in each scanner.
             // All results will match the required column-set and scanTime.
 
-            for (int i = 0; i < scanners.length; i++) {
+            for (int i = 0; i < scanners.length; i++) { // zeng: 遍历memcache 与 hfile scanner
+
                 keys[i] = new HStoreKey();
                 resultSets[i] = new TreeMap<Text, byte[]>();
-                if (scanners[i] != null && !scanners[i].next(keys[i], resultSets[i])) {
+
+                if (scanners[i] != null && !scanners[i].next(keys[i], resultSets[i])) { // zeng: MemcacheScanner.next StoreFileScanner.next
                     closeScanner(i);
                 }
+
             }
 
             // As we have now successfully completed initialization, increment the
@@ -2729,12 +2732,12 @@ public class HStore implements HConstants {
             boolean filtered = true;
             boolean moreToFollow = true;
 
-            while (filtered && moreToFollow) {
+            while (filtered && moreToFollow) {  // zeng: 如果行被过滤了 且 moreToFollow, 那么继续下一行(否则只处理一行)
 
                 // Find the lowest-possible key.
+                // zeng: keys中最小的key
                 Text chosenRow = null;
                 long chosenTimestamp = -1;
-
                 for (int i = 0; i < this.keys.length; i++) {
 
                     if (
@@ -2753,14 +2756,16 @@ public class HStore implements HConstants {
                 }
 
                 // Filter whole row by row key?
+                // zeng: 这一行是否被过滤了
                 filtered = dataFilter != null ? dataFilter.filter(chosenRow) : false;
 
                 // Store the key and results for each sub-scanner. Merge them as
                 // appropriate.
                 if (chosenTimestamp >= 0 && !filtered) {
-
                     // Here we are setting the passed in key with current row+timestamp
+                    // zeng: 写入key
                     key.setRow(chosenRow);
+                    // zeng: 用这一行符合的数据的最小的时间戳
                     key.setVersion(chosenTimestamp);
                     key.setColumn(HConstants.EMPTY_TEXT);
 
@@ -2776,15 +2781,12 @@ public class HStore implements HConstants {
 
                     for (int i = 0; i < scanners.length && !filtered; i++) {
 
-                        while (
-                                (
-                                        scanners[i] != null && !filtered && moreToFollow
-                                ) && keys[i].getRow().compareTo(chosenRow) == 0
-                        ) {
+                        while (scanners[i] != null && !filtered && moreToFollow && keys[i].getRow().compareTo(chosenRow) == 0) {    // zeng: 直到扫完一行的所有版本
 
                             // If we are doing a wild card match or there are multiple
                             // matchers per column, we need to scan all the older versions of
                             // this row to pick up the rest of the family members
+                            // zeng: 是否只要一列
                             if (!wildcardMatch && !multipleMatchers && keys[i].getTimestamp() != chosenTimestamp) {
                                 break;
                             }
@@ -2793,12 +2795,13 @@ public class HStore implements HConstants {
                             // but this had the effect of overwriting newer
                             // values with older ones. So now we only insert
                             // a result if the map does not contain the key.
+                            // zeng: 遍历resultSets
                             HStoreKey hsk = new HStoreKey(key.getRow(), EMPTY_TEXT, key.getTimestamp());
                             for (Map.Entry<Text, byte[]> e : resultSets[i].entrySet()) {
 
                                 hsk.setColumn(e.getKey());
 
-                                if (HLogEdit.isDeleted(e.getValue())) {
+                                if (HLogEdit.isDeleted(e.getValue())) { // zeng: tombstone
 
                                     if (!deletes.contains(hsk)) {
                                         // Key changes as we cycle the for loop so add a copy to
@@ -2806,26 +2809,29 @@ public class HStore implements HConstants {
                                         deletes.add(new HStoreKey(hsk));
                                     }
 
-                                } else if (!deletes.contains(hsk) && !filtered && moreToFollow && !results.containsKey(e.getKey())) {
+                                } else if (!deletes.contains(hsk) && !filtered && moreToFollow && !results.containsKey(e.getKey())) {   // zeng: 如果没有对应tombstone
 
                                     if (dataFilter != null) {
                                         // Filter whole row by column data?
-                                        filtered =
-                                                dataFilter.filter(chosenRow, e.getKey(), e.getValue());
+                                        // zeng: 根据 列名 做 行过滤
+                                        filtered = dataFilter.filter(chosenRow, e.getKey(), e.getValue());
                                         if (filtered) {
                                             results.clear();
                                             break;
                                         }
                                     }
 
+                                    // zeng: column -> value 写入 results
                                     results.put(e.getKey(), e.getValue());
 
                                 }
 
                             }
 
+                            // zeng: reset resultSets
                             resultSets[i].clear();
 
+                            // zeng: 下一`行-timestamp`
                             if (!scanners[i].next(keys[i], resultSets[i])) {
                                 closeScanner(i);
                             }
@@ -2833,8 +2839,10 @@ public class HStore implements HConstants {
                         }
 
                     }
+
                 }
 
+                // zeng: 下一行
                 for (int i = 0; i < scanners.length; i++) {
 
                     // If the current scanner is non-null AND has a lower-or-equal
@@ -2843,7 +2851,7 @@ public class HStore implements HConstants {
 
                         resultSets[i].clear();
 
-                        if (!scanners[i].next(keys[i], resultSets[i])) {
+                        if (!scanners[i].next(keys[i], resultSets[i])) {    // zeng: 下一`行-timestamp`
                             closeScanner(i);
                         }
 
@@ -2851,20 +2859,25 @@ public class HStore implements HConstants {
 
                 }
 
+                // zeng: 是否有获得key
                 moreToFollow = chosenTimestamp >= 0;
+
 
                 if (dataFilter != null) {
 
+                    // zeng: 这一行处理过了
                     if (moreToFollow) {
                         dataFilter.rowProcessed(filtered, chosenRow);
                     }
 
+                    // zeng: 是否过滤掉剩下所有行
                     if (dataFilter.filterAllRemaining()) {
                         moreToFollow = false;
                     }
 
                 }
 
+                // zeng: 这一行没有符合的数据, 下一行
                 if (results.size() <= 0 && !filtered) {
                     // There were no results found for this row.  Marked it as
                     // 'filtered'-out otherwise we will not move on to the next row.

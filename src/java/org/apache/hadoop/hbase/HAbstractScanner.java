@@ -241,23 +241,28 @@ public abstract class HAbstractScanner implements HInternalScannerInterface {
      * @throws IOException
      * @see org.apache.hadoop.hbase.HScannerInterface#next(org.apache.hadoop.hbase.HStoreKey, java.util.SortedMap)
      */
-    public boolean next(HStoreKey key, SortedMap<Text, byte[]> results)
-            throws IOException {
+    public boolean next(HStoreKey key, SortedMap<Text, byte[]> results) throws IOException {
+
         if (scannerClosed) {
             return false;
         }
+
         // Find the next row label (and timestamp)
         Text chosenRow = null;
         long chosenTimestamp = -1;
+
+        // zeng: keys中最小的一个
         for (int i = 0; i < keys.length; i++) {
-            if ((keys[i] != null)
-                    && (columnMatch(i))
-                    && (keys[i].getTimestamp() <= this.timestamp)
-                    && ((chosenRow == null)
-                    || (keys[i].getRow().compareTo(chosenRow) < 0)
-                    || ((keys[i].getRow().compareTo(chosenRow) == 0)
-                    && (keys[i].getTimestamp() > chosenTimestamp)))) {
+
+            if (
+                    keys[i] != null && columnMatch(i) && keys[i].getTimestamp() <= this.timestamp && (
+                            chosenRow == null || keys[i].getRow().compareTo(chosenRow) < 0 || (
+                                    keys[i].getRow().compareTo(chosenRow) == 0 && keys[i].getTimestamp() > chosenTimestamp
+                            )
+                    )
+            ) {
                 chosenRow = new Text(keys[i].getRow());
+                // zeng: 一次只查找一个timestamp下的column
                 chosenTimestamp = keys[i].getTimestamp();
             }
         }
@@ -265,49 +270,61 @@ public abstract class HAbstractScanner implements HInternalScannerInterface {
         // Grab all the values that match this row/timestamp
         boolean insertedItem = false;
         if (chosenRow != null) {
+
+            // zeng: 写入key中
             key.setRow(chosenRow);
             key.setVersion(chosenTimestamp);
             key.setColumn(new Text(""));
 
-            for (int i = 0; i < keys.length; i++) {
+            for (int i = 0; i < keys.length; i++) { // zeng: 遍历所有key, 看有没有同一行的
+
                 // Fetch the data
-                while ((keys[i] != null)
-                        && (keys[i].getRow().compareTo(chosenRow) == 0)) {
+                while ((keys[i] != null) && keys[i].getRow().compareTo(chosenRow) == 0) {   // zeng: 同一个rowkey 的 key
 
                     // If we are doing a wild card match or there are multiple matchers
                     // per column, we need to scan all the older versions of this row
                     // to pick up the rest of the family members
 
-                    if (!wildcardMatch
-                            && !multipleMatchers
-                            && (keys[i].getTimestamp() != chosenTimestamp)) {
+                    // zeng: 如果不是通配 或者 有 多个 column matcher, 就表示只有一个column
+                    // zeng: 只查找同一个timestamp下的column
+                    if (!wildcardMatch && !multipleMatchers && keys[i].getTimestamp() != chosenTimestamp) {
                         break;
                     }
 
+                    // zeng: 这个key 的 column 是 目标column
                     if (columnMatch(i)) {
+
                         // We only want the first result for any specific family member
                         if (!results.containsKey(keys[i].getColumn())) {
                             results.put(new Text(keys[i].getColumn()), vals[i]);
                             insertedItem = true;
                         }
+
                     }
 
+                    // zeng: 下一个cell
                     if (!getNext(i)) {
                         closeSubScanner(i);
                     }
+
                 }
 
                 // Advance the current scanner beyond the chosen row, to
                 // a valid timestamp, so we're ready next time.
 
-                while ((keys[i] != null)
-                        && ((keys[i].getRow().compareTo(chosenRow) <= 0)
-                        || (keys[i].getTimestamp() > this.timestamp)
-                        || (!columnMatch(i)))) {
+                // zeng: 下一 `行-timestamp` 第一个匹配的位置
+                while (
+                        keys[i] != null && (
+                                keys[i].getRow().compareTo(chosenRow) <= 0 || keys[i].getTimestamp() > this.timestamp || !columnMatch(i)
+                        )
+                ) {
+                    // zeng: 下一个cell
                     getNext(i);
                 }
             }
+
         }
+
         return insertedItem;
     }
 

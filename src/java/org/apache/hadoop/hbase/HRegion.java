@@ -1967,6 +1967,7 @@ public class HRegion implements HConstants {
 
             // Find the lowest-possible key.
 
+            // zeng: keys中最小的key
             Text chosenRow = null;
             long chosenTimestamp = -1;
             for (int i = 0; i < this.keys.length; i++) {    // zeng: 遍历hstore scanner
@@ -1991,18 +1992,21 @@ public class HRegion implements HConstants {
             if (chosenTimestamp >= 0) {
 
                 // Here we are setting the passed in key with current row+timestamp
+                // zeng: 写入key
                 key.setRow(chosenRow);
+                // zeng: 用所有hstore中最小的时间戳
                 key.setVersion(chosenTimestamp);
                 key.setColumn(HConstants.EMPTY_TEXT);
 
-                for (int i = 0; i < scanners.length; i++) {
+                for (int i = 0; i < scanners.length; i++) { // zeng: 遍历所有hstore scanner
 
-                    if (scanners[i] != null && keys[i].getRow().compareTo(chosenRow) == 0) {
+                    if (scanners[i] != null && keys[i].getRow().compareTo(chosenRow) == 0) {    // zeng: 同一行
 
                         // NOTE: We used to do results.putAll(resultSets[i]);
                         // but this had the effect of overwriting newer
                         // values with older ones. So now we only insert
                         // a result if the map does not contain the key.
+                        // zeng: column -> value 加入 results中
                         for (Map.Entry<Text, byte[]> e : resultSets[i].entrySet()) {
 
                             if (!results.containsKey(e.getKey())) {
@@ -2011,8 +2015,10 @@ public class HRegion implements HConstants {
 
                         }
 
+                        // zeng: reset resultSets
                         resultSets[i].clear();
 
+                        // zeng: 下一行
                         if (!scanners[i].next(keys[i], resultSets[i])) {
                             closeScanner(i);
                         }
@@ -2023,6 +2029,7 @@ public class HRegion implements HConstants {
 
             }
 
+            // zeng: 下一行
             for (int i = 0; i < scanners.length; i++) {
 
                 // If the current scanner is non-null AND has a lower-or-equal
