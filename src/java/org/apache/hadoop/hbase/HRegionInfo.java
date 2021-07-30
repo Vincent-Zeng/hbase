@@ -107,8 +107,7 @@ public class HRegionInfo implements WritableComparable {
         this.tableDesc = tableDesc;
         this.endKey = new Text();
         this.offLine = false;
-        this.regionName = new Text(tableDesc.getName().toString() + DELIMITER +
-                DELIMITER + regionId);
+        this.regionName = new Text(tableDesc.getName().toString() + DELIMITER + DELIMITER + regionId);
         this.split = false;
         this.startKey = new Text();
         setHashCode();
@@ -171,9 +170,11 @@ public class HRegionInfo implements WritableComparable {
         this.regionId = System.currentTimeMillis();
 
         // zeng: region name
-        this.regionName = new Text(tableDesc.getName().toString() + DELIMITER +
-                (startKey == null ? "" : startKey.toString()) + DELIMITER +
-                regionId);
+        this.regionName = new Text(
+                tableDesc.getName().toString()
+                        + DELIMITER + (startKey == null ? "" : startKey.toString())
+                        + DELIMITER + regionId
+        );
 
         this.split = split;
 

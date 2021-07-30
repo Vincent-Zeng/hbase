@@ -125,6 +125,7 @@ public class HConnectionManager implements HConstants {
 
         private HRegionLocation rootRegionLocation;
 
+        // zeng: table -> ( region start key -> location )
         private Map<Text, SortedMap<Text, HRegionLocation>> cachedRegionLocations;
 
         /**
@@ -151,6 +152,8 @@ public class HConnectionManager implements HConstants {
             }
 
             this.pause = conf.getLong("hbase.client.pause", 30 * 1000);
+
+            // zeng: 默认重试5次
             this.numRetries = conf.getInt("hbase.client.retries.number", 5);
 
             this.master = null;
@@ -162,26 +165,25 @@ public class HConnectionManager implements HConstants {
             this.servers = new ConcurrentHashMap<String, HRegionInterface>();
         }
 
+        // zneg: hmaster rpc client
+
         /**
          * {@inheritDoc}
          */
         public HMasterInterface getMaster() throws MasterNotRunningException {
             synchronized (this.masterLock) {
-                for (int tries = 0;
-                     !this.closed &&
-                             !this.masterChecked && this.master == null &&
-                             tries < numRetries;
-                     tries++) {
+                for (int tries = 0; !this.closed && !this.masterChecked && this.master == null && tries < numRetries; tries++) {    // zeng: this.master == null
 
-                    HServerAddress masterLocation = new HServerAddress(this.conf.get(
-                            MASTER_ADDRESS, DEFAULT_MASTER_ADDRESS));
+                    HServerAddress masterLocation = new HServerAddress(this.conf.get(MASTER_ADDRESS, DEFAULT_MASTER_ADDRESS));
 
                     try {
+                        // zeng: hmaster rpc client
                         HMasterInterface tryMaster = (HMasterInterface) HbaseRPC.getProxy(
                                 HMasterInterface.class, HMasterInterface.versionID,
                                 masterLocation.getInetSocketAddress(), this.conf);
 
                         if (tryMaster.isMasterRunning()) {
+                            // zeng: hmaster rpc client
                             this.master = tryMaster;
                             break;
                         }
@@ -205,9 +207,11 @@ public class HConnectionManager implements HConstants {
                 }
                 this.masterChecked = true;
             }
+
             if (this.master == null) {
                 throw new MasterNotRunningException();
             }
+
             return this.master;
         }
 
@@ -333,11 +337,10 @@ public class HConnectionManager implements HConstants {
         private HRegionLocation locateRegion(Text tableName, Text row, boolean useCache) throws IOException {
 
             if (tableName == null || tableName.getLength() == 0) {
-                throw new IllegalArgumentException(
-                        "table name cannot be null or zero length");
+                throw new IllegalArgumentException("table name cannot be null or zero length");
             }
 
-            if (tableName.equals(ROOT_TABLE_NAME)) {
+            if (tableName.equals(ROOT_TABLE_NAME)) {    // zeng: root表
 
                 synchronized (rootRegionLock) {
                     // This block guards against two threads trying to find the root
@@ -345,24 +348,28 @@ public class HConnectionManager implements HConstants {
                     // second waits. The second thread will not do find.
 
                     if (!useCache || rootRegionLocation == null) {
+                        // zeng: 获取 root region location
                         return locateRootRegion();
                     }
+
                     return rootRegionLocation;
                 }
 
-            } else if (tableName.equals(META_TABLE_NAME)) {
+            } else if (tableName.equals(META_TABLE_NAME)) { // zeng: meta表
 
                 synchronized (metaRegionLock) {
                     // This block guards against two threads trying to load the meta
                     // region at the same time. The first will load the meta region and
                     // the second will use the value that the first one found.
 
+                    // zeng: 获取meta region location
                     return locateRegionInMeta(ROOT_TABLE_NAME, tableName, row, useCache);
                 }
 
             } else {
 
                 synchronized (userRegionLock) {
+                    // zeng: 获取region location
                     return locateRegionInMeta(META_TABLE_NAME, tableName, row, useCache);
                 }
 
@@ -390,16 +397,18 @@ public class HConnectionManager implements HConstants {
          * Search one of the meta tables (-ROOT- or .META.) for the HRegionLocation
          * info that contains the table and row we're seeking.
          */
-        private HRegionLocation locateRegionInMeta(Text parentTable,
-                                                   Text tableName, Text row, boolean useCache)
+        private HRegionLocation locateRegionInMeta(Text parentTable, Text tableName, Text row, boolean useCache)
                 throws IOException {
+
             HRegionLocation location = null;
 
             // if we're supposed to be using the cache, then check it for a possible
             // hit. otherwise, delete any existing cached location so it won't
             // interfere.
             if (useCache) {
+                // zeng: get location from cache
                 location = getCachedLocation(tableName, row);
+
                 if (location != null) {
                     return location;
                 }
@@ -410,11 +419,12 @@ public class HConnectionManager implements HConstants {
             // build the key of the meta region we should be looking for.
             // the extra 9's on the end are necessary to allow "exact" matches
             // without knowing the precise region names.
-            Text metaKey = new Text(tableName.toString() + ","
-                    + row.toString() + ",999999999999999");
+            // zeng: 为了查找 这个row在 meta region 中 的位置 构建的region name(table name, start key, region id(timestamp))
+            Text metaKey = new Text(tableName.toString() + "," + row.toString() + ",999999999999999");
 
             int tries = 0;
             while (true) {
+
                 tries++;
 
                 if (tries >= numRetries) {
@@ -424,13 +434,17 @@ public class HConnectionManager implements HConstants {
 
                 try {
                     // locate the root region
+                    // zeng: 获取 元数据region (meta表 或 root表) 的 region server地址
                     HRegionLocation metaLocation = locateRegion(parentTable, metaKey);
-                    HRegionInterface server =
-                            getHRegionConnection(metaLocation.getServerAddress());
 
+                    // zeng: 元数据region的 region server rpc client
+                    HRegionInterface server = getHRegionConnection(metaLocation.getServerAddress());
+
+                    // zeng:  找到小于等于row的最近邻的rowkey (就是 row 大于等于 start key), 然后获取这个rowkey下所有最新版本的column
                     // query the root region for the location of the meta region
                     HbaseMapWritable regionInfoRow = server.getClosestRowBefore(
-                            metaLocation.getRegionInfo().getRegionName(), metaKey);
+                            metaLocation.getRegionInfo().getRegionName(), metaKey
+                    );
 
                     if (regionInfoRow == null) {
                         throw new TableNotFoundException("Table '" + tableName +
@@ -438,20 +452,19 @@ public class HConnectionManager implements HConstants {
                     }
 
                     // convert the MapWritable into a Map we can use
-                    SortedMap<Text, byte[]> results =
-                            sortedMapFromMapWritable(regionInfoRow);
-
+                    // zeng: region info
+                    SortedMap<Text, byte[]> results = sortedMapFromMapWritable(regionInfoRow);
                     byte[] bytes = results.get(COL_REGIONINFO);
-
                     if (bytes == null || bytes.length == 0) {
                         throw new IOException("HRegionInfo was null or empty in " +
                                 parentTable);
                     }
-
                     // convert the row result into the HRegionLocation we need!
                     HRegionInfo regionInfo = (HRegionInfo) Writables.getWritable(
-                            results.get(COL_REGIONINFO), new HRegionInfo());
+                            results.get(COL_REGIONINFO), new HRegionInfo()
+                    );
 
+                    // zeng: 下线了 重试
                     if (regionInfo.isOffline()) {
                         throw new IllegalStateException("region offline: " +
                                 regionInfo.getRegionName());
@@ -463,8 +476,8 @@ public class HConnectionManager implements HConstants {
                                 "Table '" + tableName + "' was not found.");
                     }
 
-                    String serverAddress =
-                            Writables.bytesToString(results.get(COL_SERVER));
+                    // zeng: region server address
+                    String serverAddress = Writables.bytesToString(results.get(COL_SERVER));
 
                     if (serverAddress.equals("")) {
                         throw new NoServerForRegionException(
@@ -472,10 +485,11 @@ public class HConnectionManager implements HConstants {
                                         + regionInfo.getRegionName());
                     }
 
+                    // zeng: location
                     // instantiate the location
-                    location = new HRegionLocation(regionInfo,
-                            new HServerAddress(serverAddress));
+                    location = new HRegionLocation(regionInfo, new HServerAddress(serverAddress));
 
+                    // zeng: cache
                     cacheLocation(tableName, location);
 
                     return location;
@@ -508,7 +522,9 @@ public class HConnectionManager implements HConstants {
                 } catch (InterruptedException e) {
                     // continue
                 }
+
             }
+
         }
 
         /**
@@ -517,8 +533,8 @@ public class HConnectionManager implements HConstants {
          */
         private HRegionLocation getCachedLocation(Text tableName, Text row) {
             // find the map of cached locations for this table
-            SortedMap<Text, HRegionLocation> tableLocations =
-                    cachedRegionLocations.get(tableName);
+            // zeng: table 下 region 的 location
+            SortedMap<Text, HRegionLocation> tableLocations = cachedRegionLocations.get(tableName);
 
             // if tableLocations for this table isn't built yet, make one
             if (tableLocations == null) {
@@ -529,21 +545,20 @@ public class HConnectionManager implements HConstants {
             // start to examine the cache. we can only do cache actions
             // if there's something in the cache for this table.
             if (!tableLocations.isEmpty()) {
+
                 if (tableLocations.containsKey(row)) {
                     return tableLocations.get(row);
                 }
 
                 // cut the cache so that we only get the part that could contain
                 // regions that match our key
-                SortedMap<Text, HRegionLocation> matchingRegions =
-                        tableLocations.headMap(row);
+                SortedMap<Text, HRegionLocation> matchingRegions = tableLocations.headMap(row);
 
                 // if that portion of the map is empty, then we're done. otherwise,
                 // we need to examine the cached location to verify that it is
                 // a match by end key as well.
                 if (!matchingRegions.isEmpty()) {
-                    HRegionLocation possibleRegion =
-                            matchingRegions.get(matchingRegions.lastKey());
+                    HRegionLocation possibleRegion = matchingRegions.get(matchingRegions.lastKey());
 
                     Text endKey = possibleRegion.getRegionInfo().getEndKey();
 
@@ -613,8 +628,8 @@ public class HConnectionManager implements HConstants {
             Text startKey = location.getRegionInfo().getStartKey();
 
             // find the map of cached locations for this table
-            SortedMap<Text, HRegionLocation> tableLocations =
-                    cachedRegionLocations.get(tableName);
+            // zeng: region start key -> location
+            SortedMap<Text, HRegionLocation> tableLocations = cachedRegionLocations.get(tableName);
 
             // if tableLocations for this table isn't built yet, make one
             if (tableLocations == null) {
@@ -629,20 +644,18 @@ public class HConnectionManager implements HConstants {
         /**
          * {@inheritDoc}
          */
-        public HRegionInterface getHRegionConnection(
-                HServerAddress regionServer)
-                throws IOException {
+        public HRegionInterface getHRegionConnection(HServerAddress regionServer) throws IOException {
 
             HRegionInterface server;
             synchronized (this.servers) {
                 // See if we already have a connection
+                // zeng: cache
                 server = this.servers.get(regionServer.toString());
 
                 if (server == null) { // Get a connection
                     long versionId = 0;
                     try {
-                        versionId =
-                                serverInterfaceClass.getDeclaredField("versionID").getLong(server);
+                        versionId = serverInterfaceClass.getDeclaredField("versionID").getLong(server);
                     } catch (IllegalAccessException e) {
                         // Should never happen unless visibility of versionID changes
                         throw new UnsupportedOperationException(
@@ -656,11 +669,15 @@ public class HConnectionManager implements HConstants {
                     }
 
                     try {
-                        server = (HRegionInterface) HbaseRPC.waitForProxy(serverInterfaceClass,
-                                versionId, regionServer.getInetSocketAddress(), this.conf);
+                        // zeng: region server rpc client
+                        server = (HRegionInterface) HbaseRPC.waitForProxy(
+                                serverInterfaceClass, versionId, regionServer.getInetSocketAddress(), this.conf
+                        );
                     } catch (RemoteException e) {
                         throw RemoteExceptionHandler.decodeRemoteException(e);
                     }
+
+                    // zeng: cache
                     this.servers.put(regionServer.toString(), server);
                 }
             }
@@ -716,20 +733,23 @@ public class HConnectionManager implements HConstants {
          * after retrying
          * @throws IOException
          */
-        private HRegionLocation locateRootRegion()
-                throws IOException {
-
+        private HRegionLocation locateRootRegion() throws IOException {
+            // zeng: 获取hmaster
             getMaster();
 
             HServerAddress rootRegionAddress = null;
 
             for (int tries = 0; tries < numRetries; tries++) {
+
                 int localTimeouts = 0;
 
                 // ask the master which server has the root region
                 while (rootRegionAddress == null && localTimeouts < numRetries) {
+                    // zeng: root region 的 region server 地址
                     rootRegionAddress = master.findRootRegion();
+
                     if (rootRegionAddress == null) {
+
                         try {
                             if (LOG.isDebugEnabled()) {
                                 LOG.debug("Sleeping. Waiting for root region.");
@@ -742,24 +762,29 @@ public class HConnectionManager implements HConstants {
                             // continue
                         }
                         localTimeouts++;
+
                     }
+
                 }
 
                 if (rootRegionAddress == null) {
-                    throw new NoServerForRegionException(
-                            "Timed out trying to locate root region");
+                    throw new NoServerForRegionException("Timed out trying to locate root region");
                 }
 
+                // zeng: region server rpc client
                 // get a connection to the region server
                 HRegionInterface server = getHRegionConnection(rootRegionAddress);
 
                 try {
+
                     // if this works, then we're good, and we have an acceptable address,
                     // so we can stop doing retries and return the result.
+                    // zeng: 获取root region info, 如果异常说明region不在这个region server上, 重试
                     server.getRegionInfo(HRegionInfo.rootRegionInfo.getRegionName());
                     break;
+
                 } catch (IOException e) {
-                    if (tries == numRetries - 1) {
+                    if (tries == numRetries - 1) {  // zeng: 重试次数
                         // Don't bother sleeping. We've run out of retries.
                         if (e instanceof RemoteException) {
                             e = RemoteExceptionHandler.decodeRemoteException(
@@ -783,6 +808,7 @@ public class HConnectionManager implements HConstants {
                 }
 
                 rootRegionAddress = null;
+
             }
 
             // if the adress is null by this point, then the retries have failed,
@@ -792,9 +818,9 @@ public class HConnectionManager implements HConstants {
                         "unable to locate root region server");
             }
 
+            // zeng: root region location
             // return the region location
-            return new HRegionLocation(
-                    HRegionInfo.rootRegionInfo, rootRegionAddress);
+            return new HRegionLocation(HRegionInfo.rootRegionInfo, rootRegionAddress);
         }
     }
 }

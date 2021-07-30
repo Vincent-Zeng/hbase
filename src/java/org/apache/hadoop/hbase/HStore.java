@@ -2121,7 +2121,7 @@ public class HStore implements HConstants {
             // finally, check the memcache
             memcache.getRowKeyAtOrBefore(row, candidateKeys);
 
-            // zeng: 最大的key的row
+            // zeng: 最大的key(与要查找的row最近邻)的row
             // return the best key from candidateKeys
             if (!candidateKeys.isEmpty()) {
                 return candidateKeys.lastKey().getRow();

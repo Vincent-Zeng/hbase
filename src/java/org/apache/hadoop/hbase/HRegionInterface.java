@@ -44,8 +44,7 @@ public interface HRegionInterface extends VersionedProtocol {
      * @return HRegionInfo object for region
      * @throws NotServingRegionException
      */
-    public HRegionInfo getRegionInfo(final Text regionName)
-            throws NotServingRegionException;
+    public HRegionInfo getRegionInfo(final Text regionName) throws NotServingRegionException;
 
     /**
      * Retrieve a single value from the specified region for the specified row

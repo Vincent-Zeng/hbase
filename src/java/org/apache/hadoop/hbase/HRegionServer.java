@@ -1474,10 +1474,10 @@ public class HRegionServer implements HConstants, HRegionInterface, Runnable {
     /**
      * {@inheritDoc}
      */
-    public HRegionInfo getRegionInfo(final Text regionName)
-            throws NotServingRegionException {
+    public HRegionInfo getRegionInfo(final Text regionName) throws NotServingRegionException {
 
         requestCount.incrementAndGet();
+
         return getRegion(regionName).getRegionInfo();
     }
 

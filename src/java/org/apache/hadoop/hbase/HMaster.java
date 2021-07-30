@@ -3047,6 +3047,7 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
         new ChangeTableState(tableName, false).process();
     }
 
+    // zeng: region server address of root region
     /**
      * {@inheritDoc}
      */

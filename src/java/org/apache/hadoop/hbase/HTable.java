@@ -82,13 +82,19 @@ public class HTable implements HConstants {
     public HTable(HBaseConfiguration conf, Text tableName) throws IOException {
         closed = true;
         tableDoesNotExist = true;
+
+        // zeng: new TableServers
         this.connection = HConnectionManager.getConnection(conf);
+
         this.tableName = tableName;
         this.pause = conf.getLong("hbase.client.pause", 10 * 1000);
         this.numRetries = conf.getInt("hbase.client.retries.number", 5);
         this.rand = new Random();
+
         this.batch = new AtomicReference<BatchUpdate>();
+
         this.connection.locateRegion(tableName, EMPTY_START_ROW);
+
         tableDoesNotExist = false;
         closed = false;
     }
@@ -308,7 +314,7 @@ public class HTable implements HConstants {
         checkClosed();
         byte[][] values = null;
 
-        values = getRegionServerWithRetries(new ServerCallable<byte[][]>(row) {
+        values = getRegionServerWithRetries(new ServerCallable<byte[][]>(row) { // zeng: 获取region server地址, 进而获取region server rpc client
             public byte[][] call() throws IOException {
                 return server.get(location.getRegionInfo().getRegionName(), row,
                         column, numVersions);
@@ -844,8 +850,7 @@ public class HTable implements HConstants {
                 LOG.debug("Advancing forward from region "
                         + this.currentRegionLocation.getRegionInfo());
 
-                if (this.currentRegionLocation.getRegionInfo().getEndKey() == null
-                        || this.currentRegionLocation.getRegionInfo().getEndKey().equals(EMPTY_TEXT)) {
+                if (this.currentRegionLocation.getRegionInfo().getEndKey() == null || this.currentRegionLocation.getRegionInfo().getEndKey().equals(EMPTY_TEXT)) {  // zeng: 最后一个region了
                     LOG.debug("We're at the end of the region, returning.");
                     close();
                     return false;
@@ -854,24 +859,28 @@ public class HTable implements HConstants {
 
             HRegionLocation oldLocation = this.currentRegionLocation;
 
-            Text localStartKey = oldLocation == null ?
-                    startRow : oldLocation.getRegionInfo().getEndKey();
+            // zeng: 下一个region
+            Text localStartKey = oldLocation == null ? startRow : oldLocation.getRegionInfo().getEndKey();
 
             // advance to the region that starts with the current region's end key
             LOG.debug("Advancing internal scanner to startKey " + localStartKey);
+
+            // zeng: region location
             this.currentRegionLocation = getRegionLocation(localStartKey);
 
             LOG.debug("New region: " + this.currentRegionLocation);
 
             try {
                 for (int tries = 0; tries < numRetries; tries++) {
+
                     // connect to the server
-                    server = connection.getHRegionConnection(
-                            this.currentRegionLocation.getServerAddress());
+                    // zeng: region server rpc client
+                    server = connection.getHRegionConnection(this.currentRegionLocation.getServerAddress());
 
                     try {
                         // open a scanner on the region server starting at the
                         // beginning of the region
+                        // zeng: region scanner
                         scannerId = server.openScanner(
                                 this.currentRegionLocation.getRegionInfo().getRegionName(),
                                 this.columns, localStartKey, scanTime, filter);
@@ -894,8 +903,11 @@ public class HTable implements HConstants {
                         if (LOG.isDebugEnabled()) {
                             LOG.debug("reloading table servers because: " + e.getMessage());
                         }
+
+                        // zeng: region location cache不对, 重新获取
                         currentRegionLocation = getRegionLocation(localStartKey, true);
                     }
+
                 }
             } catch (IOException e) {
                 close();
@@ -904,6 +916,7 @@ public class HTable implements HConstants {
                 }
                 throw e;
             }
+
             return true;
         }
 
@@ -1020,7 +1033,10 @@ public class HTable implements HConstants {
         }
 
         void instantiateServer(boolean reload) throws IOException {
+            // zeng: 获取region server地址
             this.location = getRegionLocation(row, reload);
+
+            // zeng: 获取region server rpc client (有cache层)
             this.server = connection.getHRegionConnection(location.getServerAddress());
         }
     }
@@ -1035,12 +1051,14 @@ public class HTable implements HConstants {
         List<IOException> exceptions = new ArrayList<IOException>();
         for (int tries = 0; tries < numRetries; tries++) {
             try {
-                callable.instantiateServer(tries != 0);
+                // zeng: 获取region server地址, 进而获取region server rpc client
+                callable.instantiateServer(tries != 0); // zeng: retry时不使用cache
                 return callable.call();
             } catch (IOException e) {
                 if (e instanceof RemoteException) {
                     e = RemoteExceptionHandler.decodeRemoteException((RemoteException) e);
                 }
+
                 if (tries == numRetries - 1) {
                     if (LOG.isDebugEnabled()) {
                         String message = "Trying to contact region server for row '" +
