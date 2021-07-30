@@ -924,7 +924,7 @@ public class HRegionServer implements HConstants, HRegionInterface, Runnable {
         } else {
             ArrayList<HRegion> closedRegions = closeAllRegions();
 
-            // zeng: TODO
+            // zeng: close and delete hlog
             try {
                 log.closeAndDelete();
             } catch (IOException e) {

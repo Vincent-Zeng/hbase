@@ -130,8 +130,6 @@ public class HLog implements HConstants {
     // during an update
     private final Integer updateLock = new Integer(0);
 
-    // zeng: TODO
-
     /**
      * Create an edit log at the given <code>dir</code> location.
      * <p>
@@ -161,6 +159,8 @@ public class HLog implements HConstants {
         }
 
         fs.mkdirs(dir);
+
+        // zeng: hlog writer
         rollWriter();
     }
 

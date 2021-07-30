@@ -2142,7 +2142,7 @@ public class HRegion implements HConstants {
 
     // Utility methods
 
-    // zeng: TODO 创建元数据用的region?
+    // zeng:  创建region
 
     /**
      * Convenience method creating new HRegions. Used by createTable and by the

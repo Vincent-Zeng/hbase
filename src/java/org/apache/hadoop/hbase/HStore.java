@@ -1512,7 +1512,6 @@ public class HStore implements HConstants {
                 // zeng: value
                 byte[] value = (vals[smallestKey] == null) ? null : vals[smallestKey].get();
 
-                // zeng: TODO delete不写,只写旧版本数据, 怎么知道最新版本是delete的呢?
                 // zeng: 不是删除的cell, 且当前获取的cell数不大于 保留的cell数上限
                 if (!isDeleted(sk, value, false, deletes) && timesSeen <= family.getMaxVersions()) {
                     // Keep old versions until we have maxVersions worth.
@@ -1902,8 +1901,6 @@ public class HStore implements HConstants {
     MapFile.Reader[] getReaders() {
         return this.readers.values().toArray(new MapFile.Reader[this.readers.size()]);
     }
-
-    // zeng: TODO
 
     /**
      * Get the value for the indicated HStoreKey.  Grab the target value and the
