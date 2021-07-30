@@ -534,6 +534,7 @@ public class HConnectionManager implements HConstants {
         private HRegionLocation getCachedLocation(Text tableName, Text row) {
             // find the map of cached locations for this table
             // zeng: table 下 region 的 location
+            // zeng: table location cache
             SortedMap<Text, HRegionLocation> tableLocations = cachedRegionLocations.get(tableName);
 
             // if tableLocations for this table isn't built yet, make one
@@ -546,20 +547,24 @@ public class HConnectionManager implements HConstants {
             // if there's something in the cache for this table.
             if (!tableLocations.isEmpty()) {
 
+                // zeng: 如果直接等于region start key
                 if (tableLocations.containsKey(row)) {
                     return tableLocations.get(row);
                 }
 
                 // cut the cache so that we only get the part that could contain
                 // regions that match our key
+                // zeng: 找比row小的最近邻的region start key
                 SortedMap<Text, HRegionLocation> matchingRegions = tableLocations.headMap(row);
 
                 // if that portion of the map is empty, then we're done. otherwise,
                 // we need to examine the cached location to verify that it is
                 // a match by end key as well.
                 if (!matchingRegions.isEmpty()) {
+                    // zeng: matchingRegions.lastKey() 为 比row小的最近邻的region start key
                     HRegionLocation possibleRegion = matchingRegions.get(matchingRegions.lastKey());
 
+                    // zeng: end key
                     Text endKey = possibleRegion.getRegionInfo().getEndKey();
 
                     // make sure that the end key is greater than the row we're looking
@@ -567,7 +572,10 @@ public class HConnectionManager implements HConstants {
                     // this one. the exception case is when the endkey is EMPTY_START_ROW,
                     // signifying that the region we're checking is actually the last
                     // region in the table.
+
+                    // zeng: row 小于 end key
                     if (endKey.equals(EMPTY_TEXT) || endKey.compareTo(row) > 0) {
+                        // zeng: row就在这个region里
                         return possibleRegion;
                     }
                 }
