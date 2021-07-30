@@ -114,7 +114,9 @@ public class HBaseAdmin implements HConstants {
     createTableAsync(desc);
 
     for (int tries = 0; tries < numRetries; tries++) {
+
       try {
+
         // Wait for new table to come on-line
         connection.locateRegion(desc.getName(), EMPTY_START_ROW);
         break;
@@ -125,11 +127,13 @@ public class HBaseAdmin implements HConstants {
           throw e;
         }
       }
+
       try {
         Thread.sleep(pause);
       } catch (InterruptedException e) {
         // continue
       }
+
     }
   }
   

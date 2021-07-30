@@ -151,33 +151,41 @@ public class HRegionInfo implements WritableComparable {
      *                  regions that may or may not hold references to this region.
      * @throws IllegalArgumentException
      */
-    public HRegionInfo(HTableDescriptor tableDesc, Text startKey, Text endKey,
-                       final boolean split) throws IllegalArgumentException {
+    public HRegionInfo(
+            HTableDescriptor tableDesc, Text startKey, Text endKey, final boolean split
+    ) throws IllegalArgumentException {
 
         if (tableDesc == null) {
             throw new IllegalArgumentException("tableDesc cannot be null");
         }
 
+        // zeng: endKey
         this.endKey = new Text();
         if (endKey != null) {
             this.endKey.set(endKey);
         }
 
         this.offLine = false;
+
+        // zeng: region id
         this.regionId = System.currentTimeMillis();
 
+        // zeng: region name
         this.regionName = new Text(tableDesc.getName().toString() + DELIMITER +
                 (startKey == null ? "" : startKey.toString()) + DELIMITER +
                 regionId);
 
         this.split = split;
 
+        // zeng: startKey
         this.startKey = new Text();
         if (startKey != null) {
             this.startKey.set(startKey);
         }
 
         this.tableDesc = tableDesc;
+
+        // zeng: hash code
         setHashCode();
     }
 

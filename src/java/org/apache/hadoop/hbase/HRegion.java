@@ -400,7 +400,7 @@ public class HRegion implements HConstants {
 
             stores.put(c.getFamilyName(), store);
 
-            // zeng: TODO
+            // zeng:hifle中最大的sequence id
             long storeSeqId = store.getMaxSequenceId();
             if (storeSeqId > maxSeqId) {
                 maxSeqId = storeSeqId;
@@ -416,6 +416,7 @@ public class HRegion implements HConstants {
             fs.delete(oldLogFile);
         }
 
+        // zeng: 所有hfile中最大的sequence id
         this.minSequenceId = maxSeqId;
 
         if (LOG.isDebugEnabled()) {
@@ -492,7 +493,7 @@ public class HRegion implements HConstants {
         return close(false, null);
     }
 
-    // zeng: TODO
+    // zeng: close region
 
     /**
      * Close down this HRegion.  Flush the cache unless abort parameter is true,
@@ -508,15 +509,16 @@ public class HRegion implements HConstants {
      * we are not to close at this time or we are already closed.
      * @throws IOException
      */
-    List<HStoreFile> close(boolean abort,
-                           final RegionUnavailableListener listener) throws IOException {
+    List<HStoreFile> close(boolean abort, final RegionUnavailableListener listener) throws IOException {
         Text regionName = this.regionInfo.getRegionName();
         if (isClosed()) {
             LOG.warn("region " + regionName + " already closed");
             return null;
         }
+
         synchronized (splitLock) {
             synchronized (writestate) {
+
                 // Disable compacting and flushing by background threads for this
                 // region.
                 writestate.writesEnabled = false;
@@ -524,6 +526,7 @@ public class HRegion implements HConstants {
 
                 // zeng: wait compact or flush to finish
                 while (writestate.compacting || writestate.flushing) {
+
                     LOG.debug("waiting for" +
                             (writestate.compacting ? " compaction" : "") +
                             (writestate.flushing ?
@@ -531,13 +534,17 @@ public class HRegion implements HConstants {
                                     ""
                             ) + " to complete for region " + regionName
                     );
+
                     try {
                         writestate.wait();
                     } catch (InterruptedException iex) {
                         // continue
                     }
+
                 }
+
             }
+
             lock.writeLock().lock();
             LOG.debug("new updates and scanners for region " + regionName +
                     " disabled");

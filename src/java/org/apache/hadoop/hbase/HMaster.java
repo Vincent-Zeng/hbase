@@ -766,6 +766,7 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
                 synchronized (metaScannerLock) {
                     // zeng: 扫描该meta region
                     scanRegion(region);
+                    // zeng: meta region start key -> meta region 映射
                     onlineMetaRegions.put(region.getStartKey(), region);
                 }
                 scanSuccessful = true;
@@ -1070,7 +1071,7 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
         this.address = new HServerAddress(server.getListenerAddress());
         conf.set(MASTER_ADDRESS, address.toString());
 
-        // zeng: TODO
+        // zeng: new TableServers
         this.connection = HConnectionManager.getConnection(conf);
 
         this.metaRescanInterval = conf.getInt("hbase.master.meta.thread.rescanfrequency", 60 * 1000);
@@ -1083,7 +1084,7 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
         // Scans the meta table
         this.metaScannerThread = new MetaScanner();
 
-        // zeng: TODO
+        // zeng: root表region enqueue for assign
         unassignRootRegion();
 
         this.sleeper = new Sleeper(this.threadWakeFrequency, this.closed);
@@ -1788,15 +1789,15 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
                     }
                     break;
 
-                case HMsg.MSG_REPORT_OPEN:
+                case HMsg.MSG_REPORT_OPEN:  // zeng: region已经打开完毕
 
                     boolean duplicateAssignment = false;
 
                     synchronized (unassignedRegions) {
 
-                        if (unassignedRegions.remove(region) == null) {
+                        if (unassignedRegions.remove(region) == null) { // zeng: 之前分配过了
 
-                            if (region.getRegionName().compareTo(HRegionInfo.rootRegionInfo.getRegionName()) == 0) {
+                            if (region.getRegionName().compareTo(HRegionInfo.rootRegionInfo.getRegionName()) == 0) {    // zeng: root region
 
                                 // Root region
                                 HServerAddress rootServer = rootRegionLocation.get();
@@ -1809,6 +1810,7 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
                                     }
                                     // We received an open report on the root region, but it is
                                     // assigned to a different server
+                                    // zeng: 重复分配
                                     duplicateAssignment = true;
 
                                 }
@@ -1825,12 +1827,14 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
                                 // Although we can't tell for certain if this is a duplicate
                                 // report from the correct server, we are going to treat it
                                 // as such
+                                // zeng: 重复分配
                                 duplicateAssignment = true;
 
                             }
+
                         }
 
-                        if (duplicateAssignment) {
+                        if (duplicateAssignment) {  // zeng: 重复分配
 
                             if (LOG.isDebugEnabled()) {
                                 LOG.debug("region server " + info.getServerAddress().toString()
@@ -1842,6 +1846,7 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
                             // Otherwise the HMaster will think the Region was closed on purpose,
                             // and then try to reopen it elsewhere; that's not what we want.
 
+                            // zeng: 发送`MSG_REGION_CLOSE_WITHOUT_REPORT`指令, 让region server关掉该region
                             returnMsgs.add(new HMsg(HMsg.MSG_REGION_CLOSE_WITHOUT_REPORT, region));
 
                         } else {
@@ -1849,16 +1854,18 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
                             LOG.info(info.getServerAddress().toString() + " serving " +
                                     region.getRegionName());
 
-                            if (region.getRegionName().compareTo(HRegionInfo.rootRegionInfo.getRegionName()) == 0) {
+                            if (region.getRegionName().compareTo(HRegionInfo.rootRegionInfo.getRegionName()) == 0) {    // zeng: root region
 
                                 // Store the Root Region location (in memory)
                                 synchronized (rootRegionLocation) {
+                                    // zeng: update rootRegionLocation
                                     this.rootRegionLocation.set(new HServerAddress(info.getServerAddress()));
                                     this.rootRegionLocation.notifyAll();
                                 }
 
                             } else {
 
+                                // zeng: 等待meta表更新
                                 // Note that the table has been assigned and is waiting for the
                                 // meta table to be updated.
                                 pendingRegions.add(region.getRegionName());
@@ -1866,6 +1873,7 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
                                 // Queue up an update to note the region location.
 
                                 try {
+                                    // zeng: 新建 ProcessRegionOpen 事项
                                     toDoQueue.put(new ProcessRegionOpen(info, region));
                                 } catch (InterruptedException e) {
                                     throw new RuntimeException(
@@ -1968,7 +1976,7 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
             }
         }
 
-        // zeng: TODO
+        // zeng: 分配给请求region server一些region
         // Figure out what the RegionServer ought to do, and write back.
         assignRegions(info, serverName, returnMsgs);
 
@@ -2018,10 +2026,10 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
                     continue;
                 }
 
-                // zeng: open太久没成功, 重新分配region
+                // zeng: 没有assign 或者 open太久(60s + 60s)没成功, 重新分配region
                 long diff = now - e.getValue().longValue();
                 if (diff > this.maxRegionOpenTime) {
-                    // zeng: TODO
+                    // zeng: enqueue to regionsToAssign
                     regionsToAssign.add(e.getKey());
                 }
 
@@ -2033,8 +2041,11 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
                 return;
             }
 
+            // zeng: 只有一个region server
             if (this.serversToServerInfo.size() == 1) {
+                // zeng: 把所有region都分配给这个region server
                 assignRegionsToOneServer(regionsToAssign, serverName, returnMsgs);
+
                 // Finished.  Return.
                 return;
             }
@@ -2042,19 +2053,26 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
             // Multiple servers in play.
             // We need to allocate regions only to most lightly loaded servers.
             HServerLoad thisServersLoad = info.getLoad();
+
+            // zeng: 优先分配给负载更小的region server, 直到负载比请求的 region server 大, 返回分配给更小的region server的region数
             int nregions = regionsPerServer(nRegionsToAssign, thisServersLoad);
+
+            // zeng:
             nRegionsToAssign -= nregions;
             if (nRegionsToAssign > 0) {
                 // We still have more regions to assign. See how many we can assign
                 // before this server becomes more heavily loaded than the next
                 // most heavily loaded server.
-                SortedMap<HServerLoad, Set<String>> heavyServers =
-                        new TreeMap<HServerLoad, Set<String>>();
+                // zeng: 大于等于请求 region server 负载更大的 region server
+                SortedMap<HServerLoad, Set<String>> heavyServers = new TreeMap<HServerLoad, Set<String>>();
                 synchronized (this.loadToServers) {
                     heavyServers.putAll(this.loadToServers.tailMap(thisServersLoad));
                 }
+
                 int nservers = 0;
                 HServerLoad heavierLoad = null;
+
+                // zeng: 第一个比请求的region server负载更大的region server
                 for (Map.Entry<HServerLoad, Set<String>> e : heavyServers.entrySet()) {
                     Set<String> servers = e.getValue();
                     nservers += servers.size();
@@ -2070,32 +2088,39 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
                     break;
                 }
 
+                // zeng: 分配给 请求的 region server 的 region 数, 直到负载超过heavierLoad
                 nregions = 0;
                 if (heavierLoad != null) {
+
                     // There is a more heavily loaded server
-                    for (HServerLoad load =
-                         new HServerLoad(thisServersLoad.getNumberOfRequests(),
-                                 thisServersLoad.getNumberOfRegions());
-                         load.compareTo(heavierLoad) <= 0 && nregions < nRegionsToAssign;
-                         load.setNumberOfRegions(load.getNumberOfRegions() + 1), nregions++) {
+                    for (
+                            HServerLoad load = new HServerLoad(thisServersLoad.getNumberOfRequests(), thisServersLoad.getNumberOfRegions());
+                            load.compareTo(heavierLoad) <= 0 && nregions < nRegionsToAssign;
+                            load.setNumberOfRegions(load.getNumberOfRegions() + 1), nregions++
+                    ) {
                         // continue;
                     }
+
                 }
 
                 if (nregions < nRegionsToAssign) {
+
                     // There are some more heavily loaded servers
                     // but we can't assign all the regions to this server.
                     if (nservers > 0) {
+
                         // There are other servers that can share the load.
                         // Split regions that need assignment across the servers.
-                        nregions = (int) Math.ceil((1.0 * nRegionsToAssign)
-                                / (1.0 * nservers));
+                        nregions = (int) Math.ceil((1.0 * nRegionsToAssign) / (1.0 * nservers));
+
                     } else {
+
                         // No other servers with same load.
                         // Split regions over all available servers
-                        nregions = (int) Math.ceil((1.0 * nRegionsToAssign)
-                                / (1.0 * serversToServerInfo.size()));
+                        nregions = (int) Math.ceil((1.0 * nRegionsToAssign) / (1.0 * serversToServerInfo.size()));
+
                     }
+
                 } else {
                     // Assign all regions to this server
                     nregions = nRegionsToAssign;
@@ -2105,8 +2130,14 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
                 for (HRegionInfo regionInfo : regionsToAssign) {
                     LOG.info("assigning region " + regionInfo.getRegionName() +
                             " to server " + serverName);
+
+                    // zeng: 更新时间戳
                     this.unassignedRegions.put(regionInfo, Long.valueOf(now));
+
+                    // zeng: 发送给请求 region server 一个`MSG_REGION_OPEN`指令
                     returnMsgs.add(new HMsg(HMsg.MSG_REGION_OPEN, regionInfo));
+
+                    // zeng: 分配nregions个region
                     if (--nregions <= 0) {
                         break;
                     }
@@ -2121,47 +2152,62 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
      * @param thisServersLoad
      * @return How many regions we can assign to more lightly loaded servers
      */
-    private int regionsPerServer(final int nRegionsToAssign,
-                                 final HServerLoad thisServersLoad) {
+    private int regionsPerServer(final int nRegionsToAssign, final HServerLoad thisServersLoad) {
 
-        SortedMap<HServerLoad, Set<String>> lightServers =
-                new TreeMap<HServerLoad, Set<String>>();
+        SortedMap<HServerLoad, Set<String>> lightServers = new TreeMap<HServerLoad, Set<String>>();
 
+        // zeng: 比这个region server的负载更小的region server
         synchronized (this.loadToServers) {
             lightServers.putAll(this.loadToServers.headMap(thisServersLoad));
         }
 
+        // zeng: 优先分配给负载更小的region server, 直到负载比请求的 region server 大
         int nRegions = 0;
         for (Map.Entry<HServerLoad, Set<String>> e : lightServers.entrySet()) {
-            HServerLoad lightLoad = new HServerLoad(e.getKey().getNumberOfRequests(),
-                    e.getKey().getNumberOfRegions());
+
+            HServerLoad lightLoad = new HServerLoad(
+                    e.getKey().getNumberOfRequests(),
+                    e.getKey().getNumberOfRegions()
+            );
+
             do {
+
                 lightLoad.setNumberOfRegions(lightLoad.getNumberOfRegions() + 1);
                 nRegions += 1;
-            } while (lightLoad.compareTo(thisServersLoad) <= 0
-                    && nRegions < nRegionsToAssign);
+
+            } while (lightLoad.compareTo(thisServersLoad) <= 0 && nRegions < nRegionsToAssign);
 
             nRegions *= e.getValue().size();
             if (nRegions >= nRegionsToAssign) {
                 break;
             }
+
         }
+
         return nRegions;
     }
 
-    /*
+    /**
      * Assign all to the only server. An unlikely case but still possible.
+     *
      * @param regionsToAssign
      * @param serverName
      * @param returnMsgs
      */
-    private void assignRegionsToOneServer(final Set<HRegionInfo> regionsToAssign,
-                                          final String serverName, final ArrayList<HMsg> returnMsgs) {
+    private void assignRegionsToOneServer(
+            final Set<HRegionInfo> regionsToAssign,
+            final String serverName, final ArrayList<HMsg> returnMsgs
+    ) {
         long now = System.currentTimeMillis();
+
+        // zeng: 分配所有region
         for (HRegionInfo regionInfo : regionsToAssign) {
             LOG.info("assigning region " + regionInfo.getRegionName() + " to the only server " + serverName);
 
+            // zeng: 更新时间戳
             this.unassignedRegions.put(regionInfo, Long.valueOf(now));
+
+            // zeng: 发送给 region server 一个`MSG_REGION_OPEN`
             returnMsgs.add(new HMsg(HMsg.MSG_REGION_OPEN, regionInfo));
         }
     }
@@ -2610,6 +2656,7 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
             } else {
                 server = metaRegion.getServer();
             }
+
             return connection.getHRegionConnection(server);
         }
 
@@ -2747,28 +2794,29 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
 
                 // Register the newly-available Region's location.
 
+                // zeng: meta region 的 region server rpc client
                 HRegionInterface server = getMetaServer();
                 LOG.info("updating row " + regionInfo.getRegionName() + " in table " +
                         metaRegionName + " with startcode " +
                         Writables.bytesToLong(this.startCode) + " and server " +
                         serverAddress.toString());
+
                 try {
+                    // zeng: 更新region的 server地址 和 启动时间
                     BatchUpdate b = new BatchUpdate(rand.nextLong());
                     long lockid = b.startUpdate(regionInfo.getRegionName());
-
                     b.put(lockid, COL_SERVER, Writables.stringToBytes(serverAddress.toString()));
                     b.put(lockid, COL_STARTCODE, startCode);
-
                     server.batchUpdate(metaRegionName, System.currentTimeMillis(), b);
 
-                    if (isMetaTable) {
+                    if (isMetaTable) {  // zeng: 如果是meta表
                         // It's a meta region.
-                        MetaRegion m = new MetaRegion(this.serverAddress,
-                                this.regionInfo.getRegionName(), this.regionInfo.getStartKey());
-                        if (!initialMetaScanComplete) {
+                        MetaRegion m = new MetaRegion(this.serverAddress, this.regionInfo.getRegionName(), this.regionInfo.getStartKey());
+                        if (!initialMetaScanComplete) { // zeng: 在重启加载中
                             // Put it on the queue to be scanned for the first time.
                             try {
                                 LOG.debug("Adding " + m.toString() + " to regions to scan");
+                                // zeng: enqueue for initial scan
                                 metaRegionsToScan.put(m);
                             } catch (InterruptedException e) {
                                 throw new RuntimeException(
@@ -2777,18 +2825,25 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
                         } else {
                             // Add it to the online meta regions
                             LOG.debug("Adding to onlineMetaRegions: " + m.toString());
+
+                            // zeng: enqueue for maintenance scan
                             onlineMetaRegions.put(this.regionInfo.getStartKey(), m);
                         }
                     }
+
                     // If updated successfully, remove from pending list.
+                    // zeng: remove from meta pendingRegions
                     pendingRegions.remove(regionInfo.getRegionName());
                     break;
+
                 } catch (IOException e) {
                     if (tries == numRetries - 1) {
                         throw RemoteExceptionHandler.checkIOException(e);
                     }
                 }
+
             }
+
             return true;
         }
     }
@@ -2821,6 +2876,8 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
         if (!isMasterRunning()) {
             throw new MasterNotRunningException();
         }
+
+        // zeng: new HRegionInfo
         HRegionInfo newRegion = new HRegionInfo(desc, null, null);
 
         for (int tries = 0; tries < numRetries; tries++) {
@@ -2830,7 +2887,10 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
                 if (this.metaScannerThread.waitForMetaRegionsOrClose()) {
                     break;
                 }
+
+                // zeng: 创建table的第一个region
                 createTable(newRegion);
+
                 LOG.info("created table " + desc.getName());
                 break;
 
@@ -2843,34 +2903,51 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
     }
 
     private void createTable(final HRegionInfo newRegion) throws IOException {
+
         Text tableName = newRegion.getTableDesc().getName();
         // TODO: Not thread safe check.
         if (tableInCreation.contains(tableName)) {
             throw new TableExistsException("Table " + tableName + " in process "
                     + "of being created");
         }
+
         tableInCreation.add(tableName);
+
         try {
+            你。
+
             // 1. Check to see if table already exists. Get meta region where
             // table would sit should it exist. Open scanner on it. If a region
             // for the table we want to create already exists, then table already
             // created. Throw already-exists exception.
 
+            // zeng: 这个 table 的region 存在哪个 meta region 中
             MetaRegion m = null;
             synchronized (onlineMetaRegions) {
-                m = (onlineMetaRegions.size() == 1 ?
-                        onlineMetaRegions.get(onlineMetaRegions.firstKey()) :
-                        (onlineMetaRegions.containsKey(newRegion.getRegionName()) ?
-                                onlineMetaRegions.get(newRegion.getRegionName()) :
-                                onlineMetaRegions.get(onlineMetaRegions.headMap(
-                                        newRegion.getTableDesc().getName()).lastKey())));
+                m = (
+                        onlineMetaRegions.size() == 1
+                                ? onlineMetaRegions.get(onlineMetaRegions.firstKey())
+                                : (
+                                onlineMetaRegions.containsKey(newRegion.getRegionName())
+                                        ? onlineMetaRegions.get(newRegion.getRegionName())
+                                        : onlineMetaRegions.get(onlineMetaRegions.headMap(newRegion.getTableDesc().getName()).lastKey())
+                        )
+                );
             }
 
+            // zeng: 该table是否已经在meta region中存在
+
             Text metaRegionName = m.getRegionName();
+
             HRegionInterface server = connection.getHRegionConnection(m.getServer());
-            long scannerid = server.openScanner(metaRegionName, COL_REGIONINFO_ARRAY,
-                    tableName, System.currentTimeMillis(), null);
+
+            long scannerid = server.openScanner(
+                    metaRegionName, COL_REGIONINFO_ARRAY,
+                    tableName, System.currentTimeMillis(), null
+            );
+
             try {
+
                 HbaseMapWritable data = server.next(scannerid);
 
                 // Test data and that the row for the data is for our table. If table
@@ -2879,8 +2956,7 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
 
                 if (data != null && data.size() > 0) {
                     for (Writable k : data.keySet()) {
-                        if (HRegionInfo.getTableNameFromRegionName(
-                                ((HStoreKey) k).getRow()).equals(tableName)) {
+                        if (HRegionInfo.getTableNameFromRegionName(((HStoreKey) k).getRow()).equals(tableName)) {
 
                             // Then a region for this table already exists. Ergo table exists.
 
@@ -2894,25 +2970,29 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
             }
 
             // 2. Create the HRegion
-
+            // zeng: new HRegion
             HRegion region = HRegion.createHRegion(newRegion, this.rootdir, this.conf);
 
             // 3. Insert into meta
 
+            // zeng: region info
             HRegionInfo info = region.getRegionInfo();
+
             Text regionName = region.getRegionName();
+
+            // zeng: region info 写入 meta region 中
             BatchUpdate b = new BatchUpdate(rand.nextLong());
             long lockid = b.startUpdate(regionName);
             b.put(lockid, COL_REGIONINFO, Writables.getBytes(info));
             server.batchUpdate(metaRegionName, System.currentTimeMillis(), b);
 
             // 4. Close the new region to flush it to disk.  Close its log file too.
-
+            // zeng: close region and hlog
             region.close();
             region.getLog().closeAndDelete();
 
             // 5. Get it assigned to a server
-
+            // zeng: enqueue for assign
             this.unassignedRegions.put(info, ZERO_L);
 
         } finally {

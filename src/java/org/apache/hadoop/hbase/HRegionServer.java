@@ -836,6 +836,7 @@ public class HRegionServer implements HConstants, HRegionInterface, Runnable {
                                                     "interrupted.", e);
                                         }
 
+                                        // zeng: 告诉hmaster我已经接受指令, 开始处理open指令了
                                         if (msgs[i].getMsg() == HMsg.MSG_REGION_OPEN) {
                                             // zeng: 发送给hmaster一个MSG_REPORT_PROCESS_OPEN指令
                                             this.outboundMsgs.add(new HMsg(HMsg.MSG_REPORT_PROCESS_OPEN, msgs[i].getRegionInfo()));
@@ -1352,7 +1353,7 @@ public class HRegionServer implements HConstants, HRegionInterface, Runnable {
 
             this.lock.writeLock().lock();
             try {
-                // zeng: TODO
+                // zeng: hlog 的 sequence id 要比 所有 hfile 的 sequence id 要大
                 this.log.setSequenceNumber(region.getMinSequenceId());
 
                 // zeng: 放入onlineRegions中
