@@ -95,6 +95,7 @@ public class FSUtils {
             FSDataInputStream s = fs.open(new Path(rootdir, HConstants.VERSION_FILE_NAME));
             String version = DataInputStream.readUTF(s);
             s.close();
+
             versionOk = version.compareTo(HConstants.FILE_SYSTEM_VERSION) == 0;
         }
 

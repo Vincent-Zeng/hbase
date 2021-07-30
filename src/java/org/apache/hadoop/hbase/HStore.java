@@ -1180,13 +1180,19 @@ public class HStore implements HConstants {
         ArrayList<HStoreFile> result = null;
         this.lock.writeLock().lock();
         try {
+            // zeng: close all hfile reader
             for (MapFile.Reader reader : this.readers.values()) {
                 reader.close();
             }
+
             this.readers.clear();
+
             result = new ArrayList<HStoreFile>(storefiles.values());
+
             this.storefiles.clear();
+
             LOG.debug("closed " + this.storeName);
+
             return result;
         } finally {
             this.lock.writeLock().unlock();

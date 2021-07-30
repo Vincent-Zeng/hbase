@@ -520,8 +520,9 @@ public class HRegion implements HConstants {
                 // Disable compacting and flushing by background threads for this
                 // region.
                 writestate.writesEnabled = false;
-                LOG.debug("compactions and cache flushes disabled for region " +
-                        regionName);
+                LOG.debug("compactions and cache flushes disabled for region " + regionName);
+
+                // zeng: wait compact or flush to finish
                 while (writestate.compacting || writestate.flushing) {
                     LOG.debug("waiting for" +
                             (writestate.compacting ? " compaction" : "") +
@@ -542,6 +543,7 @@ public class HRegion implements HConstants {
                     " disabled");
 
             try {
+                // zeng: wait scanner to finish
                 // Wait for active scanners to finish. The write lock we hold will prevent
                 // new scanners from being created.
                 synchronized (activeScannerCount) {
@@ -571,11 +573,13 @@ public class HRegion implements HConstants {
                     listener.closing(getRegionName());
                 }
 
+                // zeng: memcache flush to hfile
                 // Don't flush the cache if we are aborting
                 if (!abort) {
                     internalFlushcache(snapshotMemcaches());
                 }
 
+                // zeng: close hstore
                 List<HStoreFile> result = new ArrayList<HStoreFile>();
                 for (HStore store : stores.values()) {
                     result.addAll(store.close());
@@ -2159,7 +2163,7 @@ public class HRegion implements HConstants {
         // zeng: new HRegion
         return new HRegion(
                 tableDir,
-                new HLog(fs, new Path(regionDir, HREGION_LOGDIR_NAME), conf, null), // zeng: new HLog  // region dir / log
+                new HLog(fs, new Path(regionDir, HREGION_LOGDIR_NAME), conf, null), // zeng: new HLog  // zeng: region dir / log
                 fs, conf, info, null, null
         );
     }
@@ -2184,6 +2188,9 @@ public class HRegion implements HConstants {
                 log, FileSystem.get(conf), conf, info, null, null);
     }
 
+
+    // zeng: region info 写入其 元数据表 中
+
     /**
      * Inserts a new region's meta information into the passed
      * <code>meta</code> region. Used by the HMaster bootstrap code adding
@@ -2194,13 +2201,13 @@ public class HRegion implements HConstants {
      * @throws IOException
      */
     public static void addRegionToMETA(HRegion meta, HRegion r) throws IOException {
-        // zeng: TODO
+        // zeng: 大于 blockingMemcacheSize 就 wait
         meta.checkResources();
 
         // The row key is the region name
         Text row = r.getRegionName();
 
-        // zeng: TODO
+        // zeng: 行锁
         meta.obtainRowLock(row);
         try {
             // zeng: rowkey 为 regioname, col为info:regioninfo, 版本号为当前时间戳
@@ -2211,7 +2218,7 @@ public class HRegion implements HConstants {
             // zeng: region info to bytes
             edits.put(key, Writables.getBytes(r.getRegionInfo()));
 
-            // zeng: TODO
+            // zeng: 写入
             meta.update(edits);
 
         } finally {

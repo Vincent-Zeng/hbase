@@ -43,20 +43,28 @@ public class HRegionInfo implements WritableComparable {
                 JenkinsHash.hash(regionName.getBytes(), regionName.getLength(), 0)));
     }
 
-    /** delimiter used between portions of a region name */
+    /**
+     * delimiter used between portions of a region name
+     */
     private static final String DELIMITER = ",";
 
-    /** HRegionInfo for root region */
-    public static final HRegionInfo rootRegionInfo =
-            new HRegionInfo(0L, HTableDescriptor.rootTableDesc);
+    // zeng: root region info
+    /**
+     * HRegionInfo for root region
+     */
+    public static final HRegionInfo rootRegionInfo = new HRegionInfo(0L, HTableDescriptor.rootTableDesc);
 
-    /** HRegionInfo for first meta region */
+    // zeng: meta region info
+    /**
+     * HRegionInfo for first meta region
+     */
     public static final HRegionInfo firstMetaRegionInfo =
             new HRegionInfo(1L, HTableDescriptor.metaTableDesc);
 
     /**
      * Extracts table name prefix from a region name.
      * Presumes region names are ASCII characters only.
+     *
      * @param regionName A region name.
      * @return The table prefix of a region name.
      */
@@ -91,7 +99,9 @@ public class HRegionInfo implements WritableComparable {
         this.hashCode = result;
     }
 
-    /** Used to construct the HRegionInfo for the root and first meta regions */
+    /**
+     * Used to construct the HRegionInfo for the root and first meta regions
+     */
     private HRegionInfo(long regionId, HTableDescriptor tableDesc) {
         this.regionId = regionId;
         this.tableDesc = tableDesc;
@@ -104,7 +114,9 @@ public class HRegionInfo implements WritableComparable {
         setHashCode();
     }
 
-    /** Default constructor - creates empty object */
+    /**
+     * Default constructor - creates empty object
+     */
     public HRegionInfo() {
         this.endKey = new Text();
         this.offLine = false;
@@ -120,8 +132,8 @@ public class HRegionInfo implements WritableComparable {
      * Construct HRegionInfo with explicit parameters
      *
      * @param tableDesc the table descriptor
-     * @param startKey first key in region
-     * @param endKey end of key range
+     * @param startKey  first key in region
+     * @param endKey    end of key range
      * @throws IllegalArgumentException
      */
     public HRegionInfo(HTableDescriptor tableDesc, Text startKey, Text endKey)
@@ -133,10 +145,10 @@ public class HRegionInfo implements WritableComparable {
      * Construct HRegionInfo with explicit parameters
      *
      * @param tableDesc the table descriptor
-     * @param startKey first key in region
-     * @param endKey end of key range
-     * @param split true if this region has split and we have daughter regions
-     * regions that may or may not hold references to this region.
+     * @param startKey  first key in region
+     * @param endKey    end of key range
+     * @param split     true if this region has split and we have daughter regions
+     *                  regions that may or may not hold references to this region.
      * @throws IllegalArgumentException
      */
     public HRegionInfo(HTableDescriptor tableDesc, Text startKey, Text endKey,
@@ -169,22 +181,30 @@ public class HRegionInfo implements WritableComparable {
         setHashCode();
     }
 
-    /** @return the endKey */
+    /**
+     * @return the endKey
+     */
     public Text getEndKey() {
         return endKey;
     }
 
-    /** @return the regionId */
+    /**
+     * @return the regionId
+     */
     public long getRegionId() {
         return regionId;
     }
 
-    /** @return the regionName */
+    /**
+     * @return the regionName
+     */
     public Text getRegionName() {
         return regionName;
     }
 
-    /** @return the encoded region name */
+    /**
+     * @return the encoded region name
+     */
     public synchronized String getEncodedName() {
         if (encodedName == null) {
             encodedName = encodeRegionName(regionName);
@@ -192,27 +212,37 @@ public class HRegionInfo implements WritableComparable {
         return encodedName;
     }
 
-    /** @return the startKey */
+    /**
+     * @return the startKey
+     */
     public Text getStartKey() {
         return startKey;
     }
 
-    /** @return the tableDesc */
+    /**
+     * @return the tableDesc
+     */
     public HTableDescriptor getTableDesc() {
         return tableDesc;
     }
 
-    /** @return true if this is the root region */
+    /**
+     * @return true if this is the root region
+     */
     public boolean isRootRegion() {
         return this.tableDesc.isRootRegion();
     }
 
-    /** @return true if this is the meta table */
+    /**
+     * @return true if this is the meta table
+     */
     public boolean isMetaTable() {
         return this.tableDesc.isMetaTable();
     }
 
-    /** @return true if this region is a meta region */
+    /**
+     * @return true if this region is a meta region
+     */
     public boolean isMetaRegion() {
         return this.tableDesc.isMetaRegion();
     }

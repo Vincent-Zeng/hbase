@@ -43,16 +43,16 @@ public class HTableDescriptor implements WritableComparable {
      * table descriptor for root table
      */
     public static final HTableDescriptor rootTableDesc = new HTableDescriptor(
-            HConstants.ROOT_TABLE_NAME,
-            new HColumnDescriptor(HConstants.COLUMN_FAMILY, 1, HColumnDescriptor.CompressionType.NONE, false, Integer.MAX_VALUE, null)
+            HConstants.ROOT_TABLE_NAME, // zeng: root table name is `-ROOT-`
+            new HColumnDescriptor(HConstants.COLUMN_FAMILY, 1, HColumnDescriptor.CompressionType.NONE, false, Integer.MAX_VALUE, null)  // zeng: family `info:`
     );
 
     /**
      * table descriptor for meta table
      */
     public static final HTableDescriptor metaTableDesc = new HTableDescriptor(
-            HConstants.META_TABLE_NAME,
-            new HColumnDescriptor(HConstants.COLUMN_FAMILY, 1, HColumnDescriptor.CompressionType.NONE, false, Integer.MAX_VALUE, null)
+            HConstants.META_TABLE_NAME, // zeng: meta table name is `.META.`
+            new HColumnDescriptor(HConstants.COLUMN_FAMILY, 1, HColumnDescriptor.CompressionType.NONE, false, Integer.MAX_VALUE, null)  // zeng: family `info:`
     );
 
     private boolean rootregion;

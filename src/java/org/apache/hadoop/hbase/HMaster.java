@@ -216,31 +216,35 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
         protected void scanRegion(final MetaRegion region) throws IOException {
             HRegionInterface regionServer = null;
             long scannerId = -1L;
-            LOG.info(Thread.currentThread().getName() + " scanning meta region " +
-                    region.toString());
+            LOG.info(Thread.currentThread().getName() + " scanning meta region " + region.toString());
 
             // Array to hold list of split parents found.  Scan adds to list.  After
             // scan we go check if parents can be removed.
-            Map<HRegionInfo, SortedMap<Text, byte[]>> splitParents =
-                    new HashMap<HRegionInfo, SortedMap<Text, byte[]>>();
+            Map<HRegionInfo, SortedMap<Text, byte[]>> splitParents = new HashMap<HRegionInfo, SortedMap<Text, byte[]>>();
             List<Text> emptyRows = new ArrayList<Text>();
             try {
+                // zeng: region server rpc client
                 regionServer = connection.getHRegionConnection(region.getServer());
-                scannerId =
-                        regionServer.openScanner(region.getRegionName(), COLUMN_FAMILY_ARRAY,
-                                EMPTY_START_ROW, System.currentTimeMillis(), null);
+                // zeng: scanner
+                scannerId = regionServer.openScanner(
+                        region.getRegionName(), COLUMN_FAMILY_ARRAY, EMPTY_START_ROW, System.currentTimeMillis(), null
+                );
 
                 int numberOfRegionsFound = 0;
                 while (true) {
+                    // zeng: next
                     HbaseMapWritable values = regionServer.next(scannerId);
+
                     if (values == null || values.size() == 0) {
                         break;
                     }
 
                     // TODO: Why does this have to be a sorted map?
+                    // zeng: parse to map
                     RowMap m = toRowMap(values);
                     SortedMap<Text, byte[]> results = m.getMap();
 
+                    // zeng: get region info
                     Text row = m.getRow();
                     HRegionInfo info = getHRegionInfo(row, results);
                     if (info == null) {
@@ -248,25 +252,36 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
                         continue;
                     }
 
+                    // zeng: get server address
                     String serverName = Writables.bytesToString(results.get(COL_SERVER));
+                    // zeng: get server start timestamp
                     long startCode = Writables.bytesToLong(results.get(COL_STARTCODE));
+
                     if (LOG.isDebugEnabled()) {
                         LOG.debug(Thread.currentThread().getName() + " regioninfo: {" +
                                 info.toString() + "}, server: " + serverName + ", startCode: " +
                                 startCode);
                     }
 
+                    // zeng: 检查这个region是否被region server serving
                     // Note Region has been assigned.
                     checkAssigned(info, serverName, startCode);
+
+                    // zeng: 是否split region的parent
                     if (isSplitParent(info)) {
                         splitParents.put(info, results);
                     }
+
                     numberOfRegionsFound += 1;
                 }
+
+                // zeng: 如果扫描的这个是root region
                 if (this.rootRegion) {
                     numberOfMetaRegions.set(numberOfRegionsFound);
                 }
+
             } catch (IOException e) {
+
                 if (e instanceof RemoteException) {
                     e = RemoteExceptionHandler.decodeRemoteException((RemoteException) e);
                     if (e instanceof UnknownScannerException) {
@@ -277,7 +292,9 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
                     }
                 }
                 throw e;
+
             } finally {
+
                 try {
                     if (scannerId != -1L && regionServer != null) {
                         regionServer.close(scannerId);
@@ -286,6 +303,7 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
                     LOG.error("Closing scanner",
                             RemoteExceptionHandler.checkIOException(e));
                 }
+
             }
 
             // Scan is finished.
@@ -302,12 +320,13 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
             // Take a look at split parents to see if any we can clean up.
 
             if (splitParents.size() > 0) {
-                for (Map.Entry<HRegionInfo, SortedMap<Text, byte[]>> e :
-                        splitParents.entrySet()) {
+                for (Map.Entry<HRegionInfo, SortedMap<Text, byte[]>> e : splitParents.entrySet()) {
                     HRegionInfo hri = e.getKey();
+                    // zeng: 检查子region是否还持有hfile引用, 没有就删除父region
                     cleanupSplits(region.getRegionName(), regionServer, hri, e.getValue());
                 }
             }
+
             LOG.info(Thread.currentThread().getName() + " scan of meta region " +
                     region.toString() + " complete");
         }
@@ -427,33 +446,38 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
             return result;
         }
 
-        protected void checkAssigned(final HRegionInfo info,
-                                     final String serverName, final long startCode)
-                throws IOException {
+        // zeng: 检查meta表中记录的region是否都分配出去了
+        protected void checkAssigned(final HRegionInfo info, final String serverName, final long startCode) throws IOException {
             // Skip region - if ...
-            if (info.isOffline()                                 // offline
-                    || killedRegions.contains(info.getRegionName())  // queued for offline
-                    || regionsToDelete.contains(info.getRegionName())) { // queued for delete
-
+            if (info.isOffline()                                 // zeng: offline
+                    || killedRegions.contains(info.getRegionName())  // zeng: queued for offline
+                    || regionsToDelete.contains(info.getRegionName())    // zeng: queued for delete
+            ) {
+                // zeng: dequeue for assign
                 unassignedRegions.remove(info);
                 return;
             }
+
             HServerInfo storedInfo = null;
             boolean deadServer = false;
             if (serverName.length() != 0) {
+                // zeng: region server在killList中, 跳过本region
                 synchronized (killList) {
                     Map<Text, HRegionInfo> regionsToKill = killList.get(serverName);
-                    if (regionsToKill != null &&
-                            regionsToKill.containsKey(info.getRegionName())) {
+                    if (regionsToKill != null && regionsToKill.containsKey(info.getRegionName())) {
                         // Skip if region is on kill list
                         if (LOG.isDebugEnabled()) {
                             LOG.debug("not assigning region (on kill list): " +
                                     info.getRegionName());
                         }
+
                         return;
                     }
                 }
+
+                // zeng: prev server info
                 storedInfo = serversToServerInfo.get(serverName);
+                // zeng: is dead?
                 deadServer = deadServers.contains(serverName);
             }
 
@@ -462,9 +486,13 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
              * or doesn't match the start code for the address -- then add it to the
              * list of unassigned regions IF not already there (or pending open).
              */
-            if (!deadServer && !unassignedRegions.containsKey(info) &&
-                    !pendingRegions.contains(info.getRegionName())
-                    && (storedInfo == null || storedInfo.getStartCode() != startCode)) {
+            if (
+                    !deadServer
+                            && !unassignedRegions.containsKey(info)
+                            && !pendingRegions.contains(info.getRegionName())
+                            && (storedInfo == null || storedInfo.getStartCode() != startCode)
+            ) {
+
                 // The current assignment is invalid
                 if (LOG.isDebugEnabled()) {
                     LOG.debug("Current assignment of " + info.getRegionName() +
@@ -480,31 +508,39 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
                 // This is only done from here if we are restarting and there is stale
                 // data in the meta region. Once we are on-line, dead server log
                 // recovery is handled by lease expiration and ProcessServerShutdown
-                if (!initialMetaScanComplete && serverName.length() != 0) {
+                if (!initialMetaScanComplete && serverName.length() != 0) { // zeng: !initialMetaScanComplete表示重启initialScan时
                     StringBuilder dirName = new StringBuilder("log_");
                     dirName.append(serverName.replace(":", "_"));
-
                     Path logDir = new Path(rootdir, dirName.toString());
+
                     try {
+
                         if (fs.exists(logDir)) {
                             splitLogLock.lock();
                             try {
+                                // zeng: 按region切分hlog
                                 HLog.splitLog(rootdir, logDir, fs, conf);
                             } finally {
                                 splitLogLock.unlock();
                             }
                         }
+
                         if (LOG.isDebugEnabled()) {
                             LOG.debug("Split " + logDir.toString());
                         }
+
                     } catch (IOException e) {
                         LOG.warn("unable to split region server log because: ", e);
                         throw e;
                     }
                 }
+
+                // zeng: queue for assign
                 // Now get the region assigned
                 unassignedRegions.put(info, ZERO_L);
+
             }
+
         }
     }
 
@@ -728,6 +764,7 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
             try {
                 // Don't interrupt us while we're working
                 synchronized (metaScannerLock) {
+                    // zeng: 扫描该meta region
                     scanRegion(region);
                     onlineMetaRegions.put(region.getStartKey(), region);
                 }
@@ -751,6 +788,7 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
                 // at least log it rather than go out silently.
                 LOG.error("Unexpected exception", e);
             }
+
             return scanSuccessful;
         }
 
@@ -760,24 +798,27 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
             // Keep going if not closed, metaRegionsToScan has been emptied (or it
             // hasn't gotten anything in it yet) and all meta regions are onlined
             // (root and meta).
-            while (!closed.get() &&
-                    (region == null || metaRegionsToScan.size() > 0) &&
-                    !metaRegionsScanned()) {
+            // zeng: 所有meta region需要先扫一遍
+            while (!closed.get() && (region == null || metaRegionsToScan.size() > 0) && !metaRegionsScanned()) {
+
                 try {
-                    region =
-                            metaRegionsToScan.poll(threadWakeFrequency, TimeUnit.MILLISECONDS);
+                    region = metaRegionsToScan.poll(threadWakeFrequency, TimeUnit.MILLISECONDS);
                 } catch (InterruptedException e) {
                     // continue
                 }
+
                 if (region == null && metaRegionsToRescan.size() != 0) {
                     region = metaRegionsToRescan.remove(0);
                 }
+
                 if (region != null) {
                     if (!scanOneMetaRegion(region)) {
                         metaRegionsToRescan.add(region);
                     }
                 }
+
             }
+
             initialMetaScanComplete = true;
             return true;
         }
@@ -799,12 +840,13 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
          * regions. This wakes up any threads that were waiting for this to happen.
          */
         private synchronized boolean metaRegionsScanned() {
-            if (!rootScanned ||
-                    numberOfMetaRegions.get() != onlineMetaRegions.size()) {
+            if (!rootScanned || numberOfMetaRegions.get() != onlineMetaRegions.size()) {
                 return false;
             }
+
             LOG.info("all meta regions scanned");
             notifyAll();
+
             return true;
         }
 
@@ -835,8 +877,7 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
     /**
      * The map of known server names to server info
      */
-    volatile Map<String, HServerInfo> serversToServerInfo =
-            new ConcurrentHashMap<String, HServerInfo>();
+    volatile Map<String, HServerInfo> serversToServerInfo = new ConcurrentHashMap<String, HServerInfo>();
 
     /**
      * Set of known dead servers
@@ -847,14 +888,12 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
     /**
      * SortedMap server load -> Set of server names
      */
-    volatile SortedMap<HServerLoad, Set<String>> loadToServers =
-            Collections.synchronizedSortedMap(new TreeMap<HServerLoad, Set<String>>());
+    volatile SortedMap<HServerLoad, Set<String>> loadToServers = Collections.synchronizedSortedMap(new TreeMap<HServerLoad, Set<String>>());
 
     /**
      * Map of server names -> server load
      */
-    volatile Map<String, HServerLoad> serversToLoad =
-            new ConcurrentHashMap<String, HServerLoad>();
+    volatile Map<String, HServerLoad> serversToLoad = new ConcurrentHashMap<String, HServerLoad>();
 
     /**
      * The 'unassignedRegions' table maps from a HRegionInfo to a timestamp that
@@ -910,7 +949,8 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
      * @throws IOException
      */
     public HMaster(HBaseConfiguration conf) throws IOException {
-        this(new Path(conf.get(HBASE_DIR)),
+        this(
+                new Path(conf.get(HBASE_DIR)),
                 new HServerAddress(conf.get(MASTER_ADDRESS, DEFAULT_MASTER_ADDRESS)),
                 conf
         );
@@ -928,8 +968,10 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
     public HMaster(Path rd, HServerAddress address, HBaseConfiguration conf)
             throws IOException {
         this.conf = conf;
+
         // zeng: hbase root dir
         this.rootdir = rd;
+
         this.threadWakeFrequency = conf.getInt(THREAD_WAKE_FREQUENCY, 10 * 1000);
         // The filesystem hbase wants to use is probably not what is set into
         // fs.default.name; its value is probably the default.
@@ -951,7 +993,6 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
                 }
             }
         }
-
         this.conf.set(HConstants.HBASE_DIR, this.rootdir.toString());
 
         this.rand = new Random();
@@ -986,16 +1027,18 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
                     HRegion meta = HRegion.createHRegion(HRegionInfo.firstMetaRegionInfo,
                             this.rootdir, this.conf);
 
-                    // zeng: TODO
+                    // zeng: meta 的 元数据表 是 root, 将 meta region info 写入 root 中
                     // Add first region from the META table to the ROOT region.
                     HRegion.addRegionToMETA(root, meta);
 
-                    // zeng: TODO
+                    // zeng: close root region
                     root.close();
+                    // zeng: 删除root region的hlog
                     root.getLog().closeAndDelete();
 
-                    // zeng: TODO
+                    // zeng: close meta region
                     meta.close();
+                    // zeng: 删除meta region的hlog
                     meta.getLog().closeAndDelete();
 
                 } catch (IOException e) {
@@ -1014,29 +1057,33 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
         this.maxRegionOpenTime = conf.getLong("hbase.hbasemaster.maxregionopen", 60 * 1000);
 
         this.leaseTimeout = conf.getInt("hbase.master.lease.period", 30 * 1000);
-        this.serverLeases = new Leases(this.leaseTimeout,
-                conf.getInt("hbase.master.lease.thread.wakefrequency", 15 * 1000));
+        this.serverLeases = new Leases(this.leaseTimeout, conf.getInt("hbase.master.lease.thread.wakefrequency", 15 * 1000));
 
-        // zeng: TODO
-        this.server = HbaseRPC.getServer(this, address.getBindAddress(),
+        // zeng: hmaster server
+        this.server = HbaseRPC.getServer(
+                this, address.getBindAddress(),
                 address.getPort(), conf.getInt("hbase.regionserver.handler.count", 10),
-                false, conf);
+                false, conf
+        );
 
         //  The rpc-server port can be ephemeral... ensure we have the correct info
         this.address = new HServerAddress(server.getListenerAddress());
         conf.set(MASTER_ADDRESS, address.toString());
 
+        // zeng: TODO
         this.connection = HConnectionManager.getConnection(conf);
 
-        this.metaRescanInterval =
-                conf.getInt("hbase.master.meta.thread.rescanfrequency", 60 * 1000);
+        this.metaRescanInterval = conf.getInt("hbase.master.meta.thread.rescanfrequency", 60 * 1000);
 
+        // zeng: 开启一个线程, 定时扫描root表, 看有哪些meta region没有分配
         // The root region
         this.rootScannerThread = new RootScanner();
 
+        // zeng: 开启一个线程, 定时扫描meta表, 看有哪些普通表的region没有分配
         // Scans the meta table
         this.metaScannerThread = new MetaScanner();
 
+        // zeng: TODO
         unassignRootRegion();
 
         this.sleeper = new Sleeper(this.threadWakeFrequency, this.closed);
@@ -1046,13 +1093,12 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
         LOG.info("HMaster initialized on " + this.address.toString());
     }
 
-    /*
+    /**
      * Unassign the root region.
      * This method would be used in case where root region server had died
      * without reporting in.  Currently, we just flounder and never recover.  We
      * could 'notice' dead region server in root scanner -- if we failed access
      * multiple times -- but reassigning root is catastrophic.
-     *
      */
     void unassignRootRegion() {
         this.rootRegionLocation.set(null);
@@ -1133,7 +1179,10 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
     public void run() {
         final String threadName = "HMaster";
         Thread.currentThread().setName(threadName);
+
+        // zeng: 开启各种服务线程
         startServiceThreads();
+
         /* Main processing loop */
         try {
             while (!closed.get()) {
@@ -1142,10 +1191,12 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
                     startShutdown();
                     break;
                 }
+
                 if (rootRegionLocation.get() != null) {
                     // We can't process server shutdowns unless the root region is online
                     op = this.delayedToDoQueue.poll();
                 }
+
                 if (op == null) {
                     try {
                         op = toDoQueue.poll(threadWakeFrequency, TimeUnit.MILLISECONDS);
@@ -1153,9 +1204,11 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
                         // continue
                     }
                 }
+
                 if (op == null || closed.get()) {
                     continue;
                 }
+
                 try {
                     if (LOG.isDebugEnabled()) {
                         LOG.debug("Main processing loop: " + op.toString());
@@ -1172,16 +1225,20 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
                             // we need comes in first
                             sleeper.sleep();
                         }
+
                         try {
                             if (LOG.isDebugEnabled()) {
                                 LOG.debug("Put " + op.toString() + " back on queue");
                             }
+
                             toDoQueue.put(op);
                         } catch (InterruptedException e) {
                             throw new RuntimeException(
                                     "Putting into toDoQueue was interrupted.", e);
                         }
+
                     }
+
                 } catch (Exception ex) {
                     if (ex instanceof RemoteException) {
                         try {
@@ -1205,11 +1262,14 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
                         LOG.error("main processing loop: " + op.toString(), e);
                     }
                 }
+
             }
+
         } catch (Throwable t) {
             LOG.fatal("Unhandled exception. Starting shutdown.", t);
             this.closed.set(true);
         }
+
         // The region servers won't all exit until we stop scanning the meta regions
         stopScanners();
 
@@ -1245,6 +1305,7 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
         } catch (Exception iex) {
             LOG.warn("meta scanner", iex);
         }
+
         LOG.info("HMaster main thread exiting");
     }
 
@@ -1262,9 +1323,12 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
                     threadName + ".rootScanner");
             Threads.setDaemonThreadRunning(this.metaScannerThread,
                     threadName + ".metaScanner");
+
             // Leases are not the same as Chore threads. Set name differently.
             this.serverLeases.setName(threadName + ".leaseChecker");
             this.serverLeases.start();
+
+            // zeng: start info web server
             // Put up info server.
             int port = this.conf.getInt("hbase.master.info.port", 60010);
             if (port >= 0) {
@@ -1273,6 +1337,8 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
                 this.infoServer.setAttribute(MASTER, this);
                 this.infoServer.start();
             }
+
+            // zeng: start hmaster server
             // Start the server so everything else is running before we start
             // receiving requests.
             this.server.start();
@@ -1369,7 +1435,7 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
      * HMasterRegionInterface
      */
 
-    // zeng: TODO
+    // zeng: regionserver 报告它启动了
 
     /**
      * {@inheritDoc}
@@ -1377,19 +1443,26 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
     @SuppressWarnings("unused")
     public HbaseMapWritable regionServerStartup(HServerInfo serverInfo)
             throws IOException {
+        // zeng: region server host:port
         String s = serverInfo.getServerAddress().toString().trim();
+
         LOG.info("received start message from: " + s);
+
         // Do the lease check up here. There might already be one out on this
         // server expecially if it just shutdown and came back up near-immediately
         // after.
         if (!closed.get()) {
+            // zeng: host:port to hash
             long serverLabel = getServerLabel(s);
-            this.serverLeases.createLease(serverLabel, serverLabel,
-                    new ServerExpirer(s));
+
+            // zeng: region server注册租约, 如果没有续约, 表示region server 死掉了
+            this.serverLeases.createLease(serverLabel, serverLabel, new ServerExpirer(s));
         }
 
+        // zeng: hmaster记录这个region server
         registerRegionServer(s, serverInfo);
 
+        // zeng: 返回conf
         return createConfigurationSubset();
     }
 
@@ -1398,19 +1471,25 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
      * @param serverAddress
      * @param serverInfo
      */
-    private void registerRegionServer(final String serverAddress,
-                                      final HServerInfo serverInfo) {
+    private void registerRegionServer(final String serverAddress, final HServerInfo serverInfo) {
+        // zeng: 移除 server address -> load
         HServerLoad load = serversToLoad.remove(serverAddress);
+
         if (load != null) {
             // The startup message was from a known server.
             // Remove stale information about the server's load.
             Set<String> servers = loadToServers.get(load);
+
+
             if (servers != null) {
+                // zeng: 从servers中移除
                 servers.remove(serverAddress);
+
                 loadToServers.put(load, servers);
             }
         }
 
+        // zeng: 移除 server address -> server info
         HServerInfo storedInfo = serversToServerInfo.remove(serverAddress);
         if (storedInfo != null && !closed.get()) {
             // The startup message was from a known server with the same name.
@@ -1419,14 +1498,22 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
             if (root != null && root.equals(storedInfo.getServerAddress())) {
                 unassignRootRegion();
             }
+
+            // zeng: 下线这个server address上原来的region server
             this.delayedToDoQueue.put(new ProcessServerShutdown(storedInfo));
         }
 
         // Record new server
+        // zeng: 设置新的HServerLoad
         load = new HServerLoad();
         serverInfo.setLoad(load);
+
+        // zeng: server address -> server info
         this.serversToServerInfo.put(serverAddress, serverInfo);
+        // zeng: server address -> server load
         this.serversToLoad.put(serverAddress, load);
+
+        // zeng: load -> server address set
         Set<String> servers = loadToServers.get(load);
         if (servers == null) {
             servers = new HashSet<String>();
@@ -1453,19 +1540,27 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
         return s.hashCode();
     }
 
-    // zeng: TODO
+    // zeng: 心跳上报regionserver的负载, 以及发送给hmaster的指令, 并返回hmaster给regionserver的指令
 
     /**
      * {@inheritDoc}
      */
-    public HMsg[] regionServerReport(HServerInfo serverInfo, HMsg msgs[])
-            throws IOException {
+    public HMsg[] regionServerReport(HServerInfo serverInfo, HMsg msgs[]) throws IOException {
+        // zeng: server address
         String serverName = serverInfo.getServerAddress().toString().trim();
+
+        // zeng: server address hash
         long serverLabel = getServerLabel(serverName);
+
+        // zeng: 处理region server的指令 TODO
         if (msgs.length > 0) {
+
             if (msgs[0].getMsg() == HMsg.MSG_REPORT_EXITING) {
+
                 synchronized (serversToServerInfo) {
+
                     try {
+
                         // HRegionServer is shutting down. Cancel the server's lease.
                         // Note that canceling the server's lease takes care of updating
                         // serversToServerInfo, etc.
@@ -1498,16 +1593,23 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
                         // We don't need to return anything to the server because it isn't
                         // going to do any more work.
                         return new HMsg[0];
+
                     } finally {
                         serversToServerInfo.notifyAll();
                     }
+
                 }
+
             } else if (msgs[0].getMsg() == HMsg.MSG_REPORT_QUIESCED) {
+
                 LOG.info("Region server " + serverName + " quiesced");
                 quiescedMetaServers.incrementAndGet();
+
             }
+
         }
 
+        // zeng: TODO
         if (quiescedMetaServers.get() >= serversToServerInfo.size()) {
             // If the only servers we know about are meta servers, then we can
             // proceed with shutdown
@@ -1515,11 +1617,14 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
             startShutdown();
         }
 
+
+        // zeng: TODO
         if (shutdownRequested && !closed.get()) {
             // Tell the server to stop serving any user regions
             return new HMsg[]{new HMsg(HMsg.MSG_REGIONSERVER_QUIESCE)};
         }
 
+        // zeng: TODO
         if (closed.get()) {
             // Tell server to shut down if we are shutting down.  This should
             // happen after check of MSG_REPORT_EXITING above, since region server
@@ -1527,8 +1632,10 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
             return new HMsg[]{new HMsg(HMsg.MSG_REGIONSERVER_STOP)};
         }
 
+        // zeng: 上次的 server info
         HServerInfo storedInfo = serversToServerInfo.get(serverName);
-        if (storedInfo == null) {
+        if (storedInfo == null) {   // zeng: registerRegionServer 已经put进去了, 这里还没有, 那就是有问题, 请求region server重走启动流程
+
             if (LOG.isDebugEnabled()) {
                 LOG.debug("received server report from unknown server: " + serverName);
             }
@@ -1536,9 +1643,10 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
             // The HBaseMaster may have been restarted.
             // Tell the RegionServer to start over and call regionServerStartup()
 
+            // zeng: 发送给region server一个 MSG_CALL_SERVER_STARTUP 指令
             return new HMsg[]{new HMsg(HMsg.MSG_CALL_SERVER_STARTUP)};
 
-        } else if (storedInfo.getStartCode() != serverInfo.getStartCode()) {
+        } else if (storedInfo.getStartCode() != serverInfo.getStartCode()) {    // zeng: 如果同一台机器已经有另一个region server
 
             // This state is reachable if:
             //
@@ -1554,9 +1662,13 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
             }
 
             synchronized (serversToServerInfo) {
+                // zeng:TODO
                 cancelLease(serverName, serverLabel);
+
                 serversToServerInfo.notifyAll();
             }
+
+            // zeng: 发送一个 MSG_REGIONSERVER_STOP 指令 给该region server
             return new HMsg[]{new HMsg(HMsg.MSG_REGIONSERVER_STOP)};
 
         } else {
@@ -1564,13 +1676,14 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
             // All's well.  Renew the server's lease.
             // This will always succeed; otherwise, the fetch of serversToServerInfo
             // would have failed above.
-
+            // zeng: 心跳, 续约
             serverLeases.renewLease(serverLabel, serverLabel);
 
             // Refresh the info object and the load information
-
+            // zeng: 更新 server info
             serversToServerInfo.put(serverName, serverInfo);
 
+            // zeng: 移除旧load
             HServerLoad load = serversToLoad.get(serverName);
             if (load != null && !load.equals(serverInfo.getLoad())) {
                 // We have previous information about the load on this server
@@ -1587,8 +1700,11 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
 
             // Set the current load information
 
+            // zeng: 设置新load
             load = serverInfo.getLoad();
             serversToLoad.put(serverName, load);
+
+            // zeng: 设置新load
             Set<String> servers = loadToServers.get(load);
             if (servers == null) {
                 servers = new HashSet<String>();
@@ -1596,9 +1712,12 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
             servers.add(serverName);
             loadToServers.put(load, servers);
 
+            // zeng: 处理region server发来的指令
             // Next, process messages for this server
             return processMsgs(serverInfo, msgs);
+
         }
+
     }
 
     /**
@@ -1639,41 +1758,51 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
      */
     private HMsg[] processMsgs(HServerInfo info, HMsg incomingMsgs[])
             throws IOException {
-
         ArrayList<HMsg> returnMsgs = new ArrayList<HMsg>();
         String serverName = info.getServerAddress().toString();
         HashMap<Text, HRegionInfo> regionsToKill = null;
+
+        // zeng: hmaster是否需要该region server停机
         regionsToKill = killList.remove(serverName);
 
         // Get reports on what the RegionServer did.
-
+        // zeng: 处理region server发来的指令
         for (int i = 0; i < incomingMsgs.length; i++) {
+
             if (LOG.isDebugEnabled()) {
                 LOG.debug("Received " + incomingMsgs[i].toString() + " from " +
                         serverName);
             }
+
             HRegionInfo region = incomingMsgs[i].getRegionInfo();
 
             switch (incomingMsgs[i].getMsg()) {
 
                 case HMsg.MSG_REPORT_PROCESS_OPEN:
+
                     synchronized (unassignedRegions) {
                         // Region server has acknowledged request to open region.
                         // Extend region open time by max region open time.
-                        unassignedRegions.put(region,
-                                System.currentTimeMillis() + this.maxRegionOpenTime);
+                        // zeng: 默认给60s时间用来打开
+                        unassignedRegions.put(region, System.currentTimeMillis() + this.maxRegionOpenTime);
                     }
                     break;
 
                 case HMsg.MSG_REPORT_OPEN:
+
                     boolean duplicateAssignment = false;
+
                     synchronized (unassignedRegions) {
+
                         if (unassignedRegions.remove(region) == null) {
-                            if (region.getRegionName().compareTo(
-                                    HRegionInfo.rootRegionInfo.getRegionName()) == 0) {
+
+                            if (region.getRegionName().compareTo(HRegionInfo.rootRegionInfo.getRegionName()) == 0) {
+
                                 // Root region
                                 HServerAddress rootServer = rootRegionLocation.get();
+
                                 if (rootServer != null) {
+
                                     if (rootServer.toString().compareTo(serverName) == 0) {
                                         // A duplicate open report from the correct server
                                         break;
@@ -1681,21 +1810,28 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
                                     // We received an open report on the root region, but it is
                                     // assigned to a different server
                                     duplicateAssignment = true;
+
                                 }
+
                             } else {
+
                                 // Not root region. If it is not a pending region, then we are
                                 // going to treat it as a duplicate assignment
                                 if (pendingRegions.contains(region.getRegionName())) {
                                     // A duplicate report from the correct server
                                     break;
                                 }
+
                                 // Although we can't tell for certain if this is a duplicate
                                 // report from the correct server, we are going to treat it
                                 // as such
                                 duplicateAssignment = true;
+
                             }
                         }
+
                         if (duplicateAssignment) {
+
                             if (LOG.isDebugEnabled()) {
                                 LOG.debug("region server " + info.getServerAddress().toString()
                                         + " should not have opened region " + region.getRegionName());
@@ -1706,22 +1842,23 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
                             // Otherwise the HMaster will think the Region was closed on purpose,
                             // and then try to reopen it elsewhere; that's not what we want.
 
-                            returnMsgs.add(
-                                    new HMsg(HMsg.MSG_REGION_CLOSE_WITHOUT_REPORT, region));
+                            returnMsgs.add(new HMsg(HMsg.MSG_REGION_CLOSE_WITHOUT_REPORT, region));
 
                         } else {
+
                             LOG.info(info.getServerAddress().toString() + " serving " +
                                     region.getRegionName());
 
-                            if (region.getRegionName().compareTo(
-                                    HRegionInfo.rootRegionInfo.getRegionName()) == 0) {
+                            if (region.getRegionName().compareTo(HRegionInfo.rootRegionInfo.getRegionName()) == 0) {
+
                                 // Store the Root Region location (in memory)
                                 synchronized (rootRegionLocation) {
-                                    this.rootRegionLocation.set(
-                                            new HServerAddress(info.getServerAddress()));
+                                    this.rootRegionLocation.set(new HServerAddress(info.getServerAddress()));
                                     this.rootRegionLocation.notifyAll();
                                 }
+
                             } else {
+
                                 // Note that the table has been assigned and is waiting for the
                                 // meta table to be updated.
                                 pendingRegions.add(region.getRegionName());
@@ -1734,33 +1871,43 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
                                     throw new RuntimeException(
                                             "Putting into toDoQueue was interrupted.", e);
                                 }
+
                             }
+
                         }
+
                     }
+
                     break;
 
                 case HMsg.MSG_REPORT_CLOSE:
                     LOG.info(info.getServerAddress().toString() + " no longer serving " +
                             region);
-                    if (region.getRegionName().compareTo(
-                            HRegionInfo.rootRegionInfo.getRegionName()) == 0) {
+
+                    if (region.getRegionName().compareTo(HRegionInfo.rootRegionInfo.getRegionName()) == 0) {
+
                         // Root region
                         if (region.isOffline()) {
                             // Can't proceed without root region. Shutdown.
                             LOG.fatal("root region is marked offline");
                             shutdown();
                         }
+
                         unassignRootRegion();
                     } else {
+
                         boolean reassignRegion = !region.isOffline();
                         boolean deleteRegion = false;
+
                         if (killedRegions.remove(region.getRegionName())) {
                             reassignRegion = false;
                         }
+
                         if (regionsToDelete.remove(region.getRegionName())) {
                             reassignRegion = false;
                             deleteRegion = true;
                         }
+
                         if (region.isMetaTable()) {
                             // Region is part of the meta table. Remove it from onlineMetaRegions
                             onlineMetaRegions.remove(region.getStartKey());
@@ -1770,6 +1917,7 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
                         //       could create a race with the pending close if it gets
                         //       reassigned before the close is processed.
                         unassignedRegions.remove(region);
+
                         try {
                             toDoQueue.put(new ProcessRegionClose(region, reassignRegion,
                                     deleteRegion));
@@ -1778,10 +1926,12 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
                             throw new RuntimeException(
                                     "Putting into toDoQueue was interrupted.", e);
                         }
+
                     }
                     break;
 
                 case HMsg.MSG_REPORT_SPLIT:
+
                     HRegionInfo newRegionA = incomingMsgs[++i].getRegionInfo();
                     addToUnassignedRegions(newRegionA);
                     HRegionInfo newRegionB = incomingMsgs[++i].getRegionInfo();
@@ -1794,26 +1944,35 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
                         onlineMetaRegions.remove(region.getStartKey());
                         numberOfMetaRegions.incrementAndGet();
                     }
+
                     break;
 
                 default:
                     throw new IOException(
                             "Impossible state during msg processing.  Instruction: " +
                                     incomingMsgs[i].getMsg());
+
             }
+
         }
 
         // Process the kill list
-
+        // zeng: 该region server应该停机
         if (regionsToKill != null) {
             for (HRegionInfo i : regionsToKill.values()) {
+                // zeng: 发送给region server 一个 `MSG_REGION_CLOSE` 指令
                 returnMsgs.add(new HMsg(HMsg.MSG_REGION_CLOSE, i));
+
+                // zeng: TODO
                 killedRegions.add(i.getRegionName());
             }
         }
 
+        // zeng: TODO
         // Figure out what the RegionServer ought to do, and write back.
         assignRegions(info, serverName, returnMsgs);
+
+        // zeng: 给该region server的指令
         return returnMsgs.toArray(new HMsg[returnMsgs.size()]);
     }
 
@@ -1839,8 +1998,7 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
      * @param serverName
      * @param returnMsgs
      */
-    private void assignRegions(HServerInfo info, String serverName,
-                               ArrayList<HMsg> returnMsgs) {
+    private void assignRegions(HServerInfo info, String serverName, ArrayList<HMsg> returnMsgs) {
 
         synchronized (this.unassignedRegions) {
 
@@ -1852,17 +2010,23 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
             Set<HRegionInfo> regionsToAssign = new HashSet<HRegionInfo>();
             for (Map.Entry<HRegionInfo, Long> e : this.unassignedRegions.entrySet()) {
                 HRegionInfo i = e.getKey();
-                if (numberOfMetaRegions.get() != onlineMetaRegions.size() &&
-                        !i.isMetaRegion()) {
+
+                // zeng: 必须等先完成所有meta table region的分配
+                if (numberOfMetaRegions.get() != onlineMetaRegions.size() && !i.isMetaRegion()) {
                     // Can't assign user regions until all meta regions have been assigned
                     // and are on-line
                     continue;
                 }
+
+                // zeng: open太久没成功, 重新分配region
                 long diff = now - e.getValue().longValue();
                 if (diff > this.maxRegionOpenTime) {
+                    // zeng: TODO
                     regionsToAssign.add(e.getKey());
                 }
+
             }
+
             int nRegionsToAssign = regionsToAssign.size();
             if (nRegionsToAssign <= 0) {
                 // No regions to assign.  Return.
@@ -1948,6 +2112,7 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
                     }
                 }
             }
+
         }
     }
 
@@ -1994,8 +2159,8 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
                                           final String serverName, final ArrayList<HMsg> returnMsgs) {
         long now = System.currentTimeMillis();
         for (HRegionInfo regionInfo : regionsToAssign) {
-            LOG.info("assigning region " + regionInfo.getRegionName() +
-                    " to the only server " + serverName);
+            LOG.info("assigning region " + regionInfo.getRegionName() + " to the only server " + serverName);
+
             this.unassignedRegions.put(regionInfo, Long.valueOf(now));
             returnMsgs.add(new HMsg(HMsg.MSG_REGION_OPEN, regionInfo));
         }
@@ -2123,9 +2288,9 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
 
         /* Finds regions that the dead region server was serving
          */
-        private void scanMetaRegion(HRegionInterface server, long scannerId,
-                                    Text regionName)
+        private void scanMetaRegion(HRegionInterface server, long scannerId, Text regionName)
                 throws IOException {
+
             List<ToDoEntry> toDoList = new ArrayList<ToDoEntry>();
             Set<HRegionInfo> regions = new HashSet<HRegionInfo>();
             List<Text> emptyRows = new ArrayList<Text>();
@@ -2157,8 +2322,9 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
                         LOG.error("Server name", e);
                         break;
                     }
-                    if (serverName.length() > 0 &&
-                            deadServerName.compareTo(serverName) != 0) {
+
+                    // zeng: 如果meta中该region不是分配给这个region server
+                    if (serverName.length() > 0 && deadServerName.compareTo(serverName) != 0) {
                         continue;
                     }
 
@@ -2183,6 +2349,7 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
                     toDoList.add(todo);
 
                     if (killList.containsKey(deadServerName)) {
+
                         HashMap<Text, HRegionInfo> regionsToKill =
                                 new HashMap<Text, HRegionInfo>();
                         synchronized (killList) {
@@ -2206,6 +2373,7 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
                         }
 
                     } else {
+                        // zeng: 这个region server上有哪些region
                         // Get region reassigned
                         regions.add(info);
 
@@ -2243,6 +2411,7 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
                 }
             }
 
+            // zeng: 这些region都应该重新分配
             // Get regions reassigned
             for (HRegionInfo info : regions) {
                 unassignedRegions.put(info, ZERO_L);
@@ -2586,10 +2755,12 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
                 try {
                     BatchUpdate b = new BatchUpdate(rand.nextLong());
                     long lockid = b.startUpdate(regionInfo.getRegionName());
-                    b.put(lockid, COL_SERVER,
-                            Writables.stringToBytes(serverAddress.toString()));
+
+                    b.put(lockid, COL_SERVER, Writables.stringToBytes(serverAddress.toString()));
                     b.put(lockid, COL_STARTCODE, startCode);
+
                     server.batchUpdate(metaRegionName, System.currentTimeMillis(), b);
+
                     if (isMetaTable) {
                         // It's a meta region.
                         MetaRegion m = new MetaRegion(this.serverAddress,
@@ -3262,6 +3433,8 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
             this.server = server;
         }
 
+        // zeng: TODO
+
         /**
          * {@inheritDoc}
          */
@@ -3376,8 +3549,7 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
      * @return Null or found HRegionInfo.
      * @throws IOException
      */
-    protected HRegionInfo getHRegionInfo(final Text row,
-                                         final Map<Text, byte[]> map)
+    protected HRegionInfo getHRegionInfo(final Text row, final Map<Text, byte[]> map)
             throws IOException {
         byte[] bytes = map.get(COL_REGIONINFO);
         if (bytes == null) {

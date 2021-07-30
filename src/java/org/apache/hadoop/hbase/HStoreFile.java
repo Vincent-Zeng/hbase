@@ -687,12 +687,15 @@ public class HStoreFile implements HConstants {
                 if (bloomFilter == null) {
                     return super.get(key, val);
                 }
+
+                // zeng: 先用bloomfilter判断这个hfile有没有该key
                 if (bloomFilter.membershipTest(getBloomFilterKey(key))) {
                     if (LOG.isDebugEnabled()) {
                         LOG.debug("bloom filter reported that key exists");
                     }
                     return super.get(key, val);
                 }
+
                 if (LOG.isDebugEnabled()) {
                     LOG.debug("bloom filter reported that key does not exist");
                 }
@@ -703,21 +706,24 @@ public class HStoreFile implements HConstants {
              * {@inheritDoc}
              */
             @Override
-            public WritableComparable getClosest(WritableComparable key,
-                                                 Writable val) throws IOException {
+            public WritableComparable getClosest(WritableComparable key, Writable val) throws IOException {
                 if (bloomFilter == null) {
                     return super.getClosest(key, val);
                 }
+
                 // Note - the key being passed to us is always a HStoreKey
+                // zeng: 先用bloomfilter判断这个hfile有没有该key对应的行
                 if (bloomFilter.membershipTest(getBloomFilterKey(key))) {
                     if (LOG.isDebugEnabled()) {
                         LOG.debug("bloom filter reported that key exists");
                     }
                     return super.getClosest(key, val);
                 }
+
                 if (LOG.isDebugEnabled()) {
                     LOG.debug("bloom filter reported that key does not exist");
                 }
+
                 return null;
             }
         }
@@ -760,6 +766,8 @@ public class HStoreFile implements HConstants {
             }
         }
     }
+
+    // zeng: 引用文件 用来 读 hfile
 
     /**
      * A facade for a {@link MapFile.Reader} that serves up either the top or
@@ -850,8 +858,7 @@ public class HStoreFile implements HConstants {
                 // If top, the lowest possible key is midkey.  Do not have to check
                 // what comes back from super getClosest.  Will return exact match or
                 // greater.
-                closest = (key.compareTo(this.midkey) < 0) ?
-                        this.midkey : super.getClosest(key, val);
+                closest = (key.compareTo(this.midkey) < 0) ? this.midkey : super.getClosest(key, val);
             } else {
                 // We're serving bottom of the file.
                 if (key.compareTo(this.midkey) < 0) {
@@ -868,6 +875,7 @@ public class HStoreFile implements HConstants {
                 }
                 // Else, key is > midkey so let out closest = null.
             }
+
             return closest;
         }
 

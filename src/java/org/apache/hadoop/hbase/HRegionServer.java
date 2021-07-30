@@ -706,6 +706,7 @@ public class HRegionServer implements HConstants, HRegionInterface, Runnable {
 
         try {
             // zeng: init
+            // zeng: reportForDuty 通知hmaster本regionserver启动了
             init(reportForDuty(sleeper));
 
             long lastMsg = 0;
@@ -726,12 +727,12 @@ public class HRegionServer implements HConstants, HRegionInterface, Runnable {
                 if ((now - lastMsg) >= msgInterval) {   // zeng: 默认3s心跳, 并处理hmaster的命令
                     HMsg outboundArray[] = null;
                     synchronized (this.outboundMsgs) {
-                        outboundArray =
-                                this.outboundMsgs.toArray(new HMsg[outboundMsgs.size()]);
+                        outboundArray = this.outboundMsgs.toArray(new HMsg[outboundMsgs.size()]);
                         this.outboundMsgs.clear();
                     }
 
                     try {
+                        // zeng: 更新负载
                         this.serverInfo.setLoad(new HServerLoad(requestCount.get(), onlineRegions.size()));
                         this.requestCount.set(0);
 
@@ -755,27 +756,33 @@ public class HRegionServer implements HConstants, HRegionInterface, Runnable {
                         for (int i = 0; i < msgs.length && !stopRequested.get() && !restart; i++) {
                             switch (msgs[i].getMsg()) {
 
-                                case HMsg.MSG_CALL_SERVER_STARTUP:  // zeng: TODO
+                                case HMsg.MSG_CALL_SERVER_STARTUP:  // zeng: 重走启动流程
                                     LOG.info("Got call server startup message");
                                     // We the MSG_CALL_SERVER_STARTUP on startup but we can also
                                     // get it when the master is panicing because for instance
                                     // the HDFS has been yanked out from under it.  Be wary of
                                     // this message.
                                     if (checkFileSystem()) {
+
+                                        // zeng: 关闭现有的region
                                         closeAllRegions();
 
                                         synchronized (logRollerLock) {
                                             try {
+                                                // zeng: 关闭与删除hlog
                                                 log.closeAndDelete();
                                             } catch (Exception e) {
                                                 LOG.error("error closing and deleting HLog", e);
                                             }
 
                                             try {
+
                                                 // zeng: 用启动时间戳标识本次启动
                                                 serverInfo.setStartCode(System.currentTimeMillis());
+
                                                 // zeng: 每次启动都是一个新的hlog
                                                 log = setupHLog();
+
                                             } catch (IOException e) {
                                                 this.abortRequested = true;
                                                 this.stopRequested.set(true);
@@ -785,9 +792,12 @@ public class HRegionServer implements HConstants, HRegionInterface, Runnable {
                                             }
                                         }
 
+                                        // zeng: 通知hmaster本regionserver启动了
                                         reportForDuty(sleeper);
 
+                                        // zeng: 重启了
                                         restart = true;
+
                                     } else {
                                         LOG.fatal("file system available check failed. " +
                                                 "Shutting down server.");
@@ -859,6 +869,7 @@ public class HRegionServer implements HConstants, HRegionInterface, Runnable {
                             stop();
                         }
                     }
+
                 }
 
                 // zeng: sleep
@@ -1391,6 +1402,7 @@ public class HRegionServer implements HConstants, HRegionInterface, Runnable {
         } finally {
             this.lock.writeLock().unlock();
         }
+
         for (HRegion region : regionsToClose) {
             if (LOG.isDebugEnabled()) {
                 LOG.debug("closing region " + region.getRegionName());
